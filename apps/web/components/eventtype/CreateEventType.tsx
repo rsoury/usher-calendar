@@ -1,14 +1,16 @@
-import { ChevronDownIcon, PlusIcon } from "@heroicons/react/solid";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { SchedulingType } from "@prisma/client";
+import { useSession } from "next-auth/react";
 import { useRouter } from "next/router";
 import { useEffect } from "react";
 import { useForm } from "react-hook-form";
 import type { z } from "zod";
 
+import classNames from "@calcom/lib/classNames";
 import { useLocale } from "@calcom/lib/hooks/useLocale";
 import showToast from "@calcom/lib/notification";
 import { createEventTypeInput } from "@calcom/prisma/zod/custom/eventtype";
+import { trpc } from "@calcom/trpc/react";
 import { Alert } from "@calcom/ui/Alert";
 import { Button } from "@calcom/ui/Button";
 import { Dialog, DialogClose, DialogContent } from "@calcom/ui/Dialog";
@@ -19,11 +21,11 @@ import Dropdown, {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@calcom/ui/Dropdown";
+import { Icon } from "@calcom/ui/Icon";
 import { Form, InputLeading, TextAreaField, TextField } from "@calcom/ui/form/fields";
 
 import { HttpError } from "@lib/core/http/error";
 import { slugify } from "@lib/slugify";
-import { trpc } from "@lib/trpc";
 
 import Avatar from "@components/ui/Avatar";
 import * as RadioArea from "@components/ui/form/radio-area";
@@ -36,7 +38,7 @@ export interface EventTypeParent {
   image?: string | null;
 }
 
-interface Props {
+interface CreateEventTypeBtnProps {
   // set true for use on the team settings page
   canAddEvents: boolean;
   // set true when in use on the team settings page
@@ -45,10 +47,9 @@ interface Props {
   options: EventTypeParent[];
 }
 
-export default function CreateEventTypeButton(props: Props) {
-  const { t } = useLocale();
+export default function CreateEventTypeButton(props: CreateEventTypeBtnProps) {
+  const { t, isLocaleReady } = useLocale();
   const router = useRouter();
-
   // URL encoded params
   const teamId: number | undefined =
     typeof router.query.teamId === "string" && router.query.teamId
@@ -56,23 +57,32 @@ export default function CreateEventTypeButton(props: Props) {
       : undefined;
   const pageSlug = router.query.eventPage || props.options[0].slug;
   const hasTeams = !!props.options.find((option) => option.teamId);
-  const title: string =
-    typeof router.query.title === "string" && router.query.title ? router.query.title : "";
-  const length: number =
-    typeof router.query.length === "string" && router.query.length ? parseInt(router.query.length) : 15;
-  const description: string =
-    typeof router.query.description === "string" && router.query.description ? router.query.description : "";
-  const slug: string = typeof router.query.slug === "string" && router.query.slug ? router.query.slug : "";
   const type: string = typeof router.query.type == "string" && router.query.type ? router.query.type : "";
 
   const form = useForm<z.infer<typeof createEventTypeInput>>({
     resolver: zodResolver(createEventTypeInput),
   });
   const { setValue, watch, register } = form;
-  setValue("title", title);
-  setValue("length", length);
-  setValue("description", description);
-  setValue("slug", slug);
+
+  useEffect(() => {
+    if (!router.isReady) return;
+
+    const title: string =
+      typeof router.query.title === "string" && router.query.title ? router.query.title : "";
+    const length: number =
+      typeof router.query.length === "string" && router.query.length ? parseInt(router.query.length) : 15;
+    const description: string =
+      typeof router.query.description === "string" && router.query.description
+        ? router.query.description
+        : "";
+    const slug: string = typeof router.query.slug === "string" && router.query.slug ? router.query.slug : "";
+
+    setValue("title", title);
+    setValue("length", length);
+    setValue("description", description);
+    setValue("slug", slug);
+    // If query params change, update the form
+  }, [router.isReady, router.query, setValue]);
 
   useEffect(() => {
     const subscription = watch((value, { name, type }) => {
@@ -86,12 +96,17 @@ export default function CreateEventTypeButton(props: Props) {
 
   const createMutation = trpc.useMutation("viewer.eventTypes.create", {
     onSuccess: async ({ eventType }) => {
-      await router.push("/event-types/" + eventType.id);
+      await router.replace("/event-types/" + eventType.id);
       showToast(t("event_type_created_successfully", { eventTypeTitle: eventType.title }), "success");
     },
     onError: (err) => {
       if (err instanceof HttpError) {
         const message = `${err.statusCode}: ${err.message}`;
+        showToast(message, "error");
+      }
+
+      if (err.data?.code === "BAD_REQUEST") {
+        const message = `${err.data.code}: URL already exists.`;
         showToast(message, "error");
       }
 
@@ -122,44 +137,20 @@ export default function CreateEventTypeButton(props: Props) {
       { shallow: true }
     );
   };
-
+  if (!isLocaleReady) {
+    return null;
+  }
   return (
     <Dialog
       name="new-eventtype"
       clearQueryParamsOnClose={["eventPage", "teamId", "type", "description", "title", "length", "slug"]}>
-      {!hasTeams || props.isIndividualTeam ? (
-        <Button
-          onClick={() => openModal(props.options[0])}
-          data-testid="new-event-type"
-          StartIcon={PlusIcon}
-          disabled={!props.canAddEvents}>
-          {t("new_event_type_btn")}
-        </Button>
-      ) : (
-        <Dropdown>
-          <DropdownMenuTrigger asChild>
-            <Button EndIcon={ChevronDownIcon}>{t("new_event_type_btn")}</Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuLabel>{t("new_event_subtitle")}</DropdownMenuLabel>
-            <DropdownMenuSeparator className="h-px bg-gray-200" />
-            {props.options.map((option) => (
-              <DropdownMenuItem
-                key={option.slug}
-                className="cursor-pointer px-3 py-2 hover:bg-neutral-100 focus:outline-none"
-                onSelect={() => openModal(option)}>
-                <Avatar
-                  alt={option.name || ""}
-                  imageSrc={option.image}
-                  size={6}
-                  className="inline ltr:mr-2 rtl:ml-2"
-                />
-                {option.name ? option.name : option.slug}
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </Dropdown>
-      )}
+      <CreateEventTypeTrigger
+        hasTeams={hasTeams}
+        canAddEvents={props.canAddEvents}
+        isIndividualTeam={props.isIndividualTeam}
+        openModal={openModal}
+        options={props.options}
+      />
 
       <DialogContent>
         <div className="mb-4">
@@ -186,16 +177,26 @@ export default function CreateEventTypeButton(props: Props) {
             )}
             <TextField label={t("title")} placeholder={t("quick_chat")} {...register("title")} />
 
-            <TextField
-              label={t("url")}
-              required
-              addOnLeading={
-                <InputLeading>
-                  {process.env.NEXT_PUBLIC_WEBSITE_URL}/{pageSlug}/
-                </InputLeading>
-              }
-              {...register("slug")}
-            />
+            {process.env.NEXT_PUBLIC_WEBSITE_URL !== undefined &&
+            process.env.NEXT_PUBLIC_WEBSITE_URL?.length >= 21 ? (
+              <TextField
+                label={`${t("url")}: ${process.env.NEXT_PUBLIC_WEBSITE_URL}`}
+                required
+                addOnLeading={<InputLeading>/{pageSlug}/</InputLeading>}
+                {...register("slug")}
+              />
+            ) : (
+              <TextField
+                label={t("url")}
+                required
+                addOnLeading={
+                  <InputLeading>
+                    {process.env.NEXT_PUBLIC_WEBSITE_URL}/{pageSlug}/
+                  </InputLeading>
+                }
+                {...register("slug")}
+              />
+            )}
 
             <TextAreaField
               label={t("description")}
@@ -233,7 +234,7 @@ export default function CreateEventTypeButton(props: Props) {
                 <RadioArea.Group
                   {...register("schedulingType")}
                   onChange={(val) => form.setValue("schedulingType", val as SchedulingType)}
-                  className="relative mt-1 flex space-x-6 rounded-sm shadow-sm rtl:space-x-reverse">
+                  className="relative mt-1 flex space-x-6 rounded-sm rtl:space-x-reverse">
                   <RadioArea.Item
                     value={SchedulingType.COLLECTIVE}
                     defaultChecked={type === SchedulingType.COLLECTIVE}
@@ -263,5 +264,85 @@ export default function CreateEventTypeButton(props: Props) {
         </Form>
       </DialogContent>
     </Dialog>
+  );
+}
+
+type CreateEventTypeTrigger = {
+  isIndividualTeam?: boolean;
+  // EventTypeParent can be a profile (as first option) or a team for the rest.
+  options: EventTypeParent[];
+  hasTeams: boolean;
+  // set true for use on the team settings page
+  canAddEvents: boolean;
+  openModal: (option: EventTypeParent) => void;
+};
+
+export function CreateEventTypeTrigger(props: CreateEventTypeTrigger) {
+  const { t } = useLocale();
+
+  return (
+    <>
+      {!props.hasTeams || props.isIndividualTeam ? (
+        <Button
+          onClick={() => props.openModal(props.options[0])}
+          data-testid="new-event-type"
+          StartIcon={Icon.FiPlus}
+          disabled={!props.canAddEvents}>
+          {t("new_event_type_btn")}
+        </Button>
+      ) : (
+        <Dropdown>
+          <DropdownMenuTrigger asChild>
+            <Button EndIcon={Icon.FiChevronDown}>{t("new_event_type_btn")}</Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuLabel>{t("new_event_subtitle")}</DropdownMenuLabel>
+            <DropdownMenuSeparator className="h-px bg-gray-200" />
+            {props.options.map((option) => (
+              <CreateEventTeamsItem
+                key={option.slug}
+                option={option}
+                openModal={() => props.openModal(option)}
+              />
+            ))}
+          </DropdownMenuContent>
+        </Dropdown>
+      )}
+    </>
+  );
+}
+
+function CreateEventTeamsItem(props: {
+  openModal: (option: EventTypeParent) => void;
+  option: EventTypeParent;
+}) {
+  const session = useSession();
+  const membershipQuery = trpc.useQuery([
+    "viewer.teams.getMembershipbyUser",
+    {
+      memberId: session.data?.user.id as number,
+      teamId: props.option.teamId as number,
+    },
+  ]);
+
+  const isDisabled = membershipQuery.data?.role === "MEMBER";
+
+  return (
+    <DropdownMenuItem
+      key={props.option.slug}
+      className={classNames(
+        "cursor-pointer px-3 py-2  focus:outline-none",
+        isDisabled ? "cursor-default !text-gray-300" : "hover:bg-neutral-100"
+      )}
+      disabled={isDisabled}
+      onSelect={() => props.openModal(props.option)}>
+      <Avatar
+        alt={props.option.name || ""}
+        imageSrc={props.option.image}
+        size={6}
+        className="inline ltr:mr-2 rtl:ml-2"
+      />
+      {props.option.name ? props.option.name : props.option.slug}
+    </DropdownMenuItem>
   );
 }

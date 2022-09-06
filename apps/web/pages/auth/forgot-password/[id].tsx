@@ -1,13 +1,14 @@
 import { ResetPasswordRequest } from "@prisma/client";
-import dayjs from "dayjs";
 import debounce from "lodash/debounce";
 import { GetServerSidePropsContext } from "next";
 import { getCsrfToken } from "next-auth/react";
 import Link from "next/link";
 import React, { useMemo } from "react";
 
+import dayjs from "@calcom/dayjs";
+import prisma from "@calcom/prisma";
+
 import { useLocale } from "@lib/hooks/useLocale";
-import prisma from "@lib/prisma";
 
 import { HeadSeo } from "@components/seo/head-seo";
 
@@ -84,7 +85,7 @@ export default function Page({ resetPasswordRequest, csrfToken }: Props) {
             <h2 className="text-center text-3xl font-extrabold text-gray-900">{t("request_is_expired")}</h2>
           </div>
           <p>{t("request_is_expired_instructions")}</p>
-          <Link href="/auth/forgot-password">
+          <Link href="/auth/forgot-password" passHref>
             <button
               type="button"
               className="flex w-full justify-center px-4 py-2 text-sm font-medium text-blue-600 focus:outline-none focus:ring-2 focus:ring-black focus:ring-offset-2">
@@ -151,7 +152,7 @@ export default function Page({ resetPasswordRequest, csrfToken }: Props) {
                       type="password"
                       autoComplete="password"
                       required
-                      className="focus:border-brand block w-full appearance-none rounded-md border border-gray-300 px-3 py-2 placeholder-gray-400 shadow-sm focus:outline-none focus:ring-black sm:text-sm"
+                      className="focus:border-brand block w-full appearance-none rounded-md border border-gray-300 px-3 py-2 text-sm placeholder-gray-400 focus:outline-none focus:ring-black"
                     />
                   </div>
                 </div>
@@ -160,7 +161,7 @@ export default function Page({ resetPasswordRequest, csrfToken }: Props) {
                   <button
                     type="submit"
                     disabled={loading}
-                    className={`flex w-full justify-center rounded-md border border-transparent bg-blue-600 py-2 px-4 text-sm font-medium text-white shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-black focus:ring-offset-2 ${
+                    className={`flex w-full justify-center rounded-md border border-transparent bg-blue-600 py-2 px-4 text-sm font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-black focus:ring-offset-2 ${
                       loading ? "cursor-not-allowed" : ""
                     }`}>
                     {loading && (
@@ -175,11 +176,13 @@ export default function Page({ resetPasswordRequest, csrfToken }: Props) {
                           cy="12"
                           r="10"
                           stroke="currentColor"
-                          strokeWidth="4"></circle>
+                          strokeWidth="4"
+                        />
                         <path
                           className="opacity-75"
                           fill="currentColor"
-                          d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                          d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                        />
                       </svg>
                     )}
                     {t("submit")}
@@ -203,8 +206,7 @@ export async function getServerSideProps(context: GetServerSidePropsContext) {
   const id = context.params?.id as string;
 
   try {
-    const resetPasswordRequest = await prisma.resetPasswordRequest.findUnique({
-      rejectOnNotFound: true,
+    const resetPasswordRequest = await prisma.resetPasswordRequest.findUniqueOrThrow({
       where: {
         id,
       },

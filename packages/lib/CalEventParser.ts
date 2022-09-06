@@ -1,10 +1,9 @@
-import { Person } from "ics";
 import short from "short-uuid";
 import { v5 as uuidv5 } from "uuid";
 
 import type { CalendarEvent } from "@calcom/types/Calendar";
 
-import { BASE_URL } from "./constants";
+import { WEBAPP_URL } from "./constants";
 
 const translator = short();
 
@@ -46,29 +45,62 @@ ${organizer + attendees}
 };
 
 export const getAdditionalNotes = (calEvent: CalendarEvent) => {
+  if (!calEvent.additionalNotes) {
+    return "";
+  }
   return `
 ${calEvent.organizer.language.translate("additional_notes")}:
-${calEvent.description}
+${calEvent.additionalNotes}
   `;
 };
 
-export const getLocation = (calEvent: CalendarEvent) => {
-  let providerName = "";
+export const getCustomInputs = (calEvent: CalendarEvent) => {
+  if (!calEvent.customInputs) {
+    return "";
+  }
+  const customInputsString = Object.keys(calEvent.customInputs)
+    .map((key) => {
+      if (!calEvent.customInputs) return "";
+      if (calEvent.customInputs[key] !== "") {
+        return `
+${key}:
+${calEvent.customInputs[key]}
+  `;
+      }
+    })
+    .join("");
 
+  return customInputsString;
+};
+
+export const getDescription = (calEvent: CalendarEvent) => {
+  if (!calEvent.description) {
+    return "";
+  }
+  return `\n${calEvent.attendees[0].language.translate("description")}
+    ${calEvent.description}
+    `;
+};
+export const getLocation = (calEvent: CalendarEvent) => {
+  const meetingUrl = getVideoCallUrl(calEvent);
+  if (meetingUrl) {
+    return meetingUrl;
+  }
+  const providerName = getProviderName(calEvent);
+  return providerName || calEvent.location || "";
+};
+
+export const getProviderName = (calEvent: CalendarEvent): string => {
+  // TODO: use getAppName from @calcom/app-store
   if (calEvent.location && calEvent.location.includes("integrations:")) {
     const location = calEvent.location.split(":")[1];
-    providerName = location[0].toUpperCase() + location.slice(1);
+    return location[0].toUpperCase() + location.slice(1);
   }
-
-  if (calEvent.videoCallData) {
-    return calEvent.videoCallData.url;
+  // If location its a url, probably we should be validating it with a custom library
+  if (calEvent.location && /^https?:\/\//.test(calEvent.location)) {
+    return calEvent.location;
   }
-
-  if (calEvent.additionInformation?.hangoutLink) {
-    return calEvent.additionInformation.hangoutLink;
-  }
-
-  return providerName || calEvent.location || "";
+  return "";
 };
 
 export const getManageLink = (calEvent: CalendarEvent) => {
@@ -83,31 +115,65 @@ export const getUid = (calEvent: CalendarEvent): string => {
 };
 
 export const getCancelLink = (calEvent: CalendarEvent): string => {
-  return BASE_URL + "/cancel/" + getUid(calEvent);
+  return WEBAPP_URL + "/cancel/" + getUid(calEvent);
 };
 
-export const getRichDescription = (calEvent: CalendarEvent, attendee?: Person) => {
-  // Only the original attendee can make changes to the event
-  // Guests cannot
-
-  if (attendee && attendee === calEvent.attendees[0]) {
-    return `
-${getWhat(calEvent)}
-${getWhen(calEvent)}
-${getWho(calEvent)}
-${calEvent.organizer.language.translate("where")}:
-${getLocation(calEvent)}
-${getAdditionalNotes(calEvent)}
-  `.trim();
-  }
-
+export const getRichDescription = (calEvent: CalendarEvent /*, attendee?: Person*/) => {
   return `
+${getCancellationReason(calEvent)}
 ${getWhat(calEvent)}
 ${getWhen(calEvent)}
 ${getWho(calEvent)}
 ${calEvent.organizer.language.translate("where")}:
 ${getLocation(calEvent)}
+${getDescription(calEvent)}
 ${getAdditionalNotes(calEvent)}
-${getManageLink(calEvent)}
+${getCustomInputs(calEvent)}
+${
+  // TODO: Only the original attendee can make changes to the event
+  // Guests cannot
+  getManageLink(calEvent)
+}
+${
+  calEvent.paymentInfo
+    ? `
+${calEvent.organizer.language.translate("pay_now")}:
+${calEvent.paymentInfo.link}
+`
+    : ""
+}
   `.trim();
+};
+
+export const getCancellationReason = (calEvent: CalendarEvent) => {
+  if (!calEvent.cancellationReason) return "";
+  return `
+${calEvent.organizer.language.translate("cancellation_reason")}:
+${calEvent.cancellationReason}
+ `;
+};
+
+export const isDailyVideoCall = (calEvent: CalendarEvent): boolean => {
+  return calEvent?.videoCallData?.type === "daily_video";
+};
+
+export const getPublicVideoCallUrl = (calEvent: CalendarEvent): string => {
+  return WEBAPP_URL + "/video/" + getUid(calEvent);
+};
+
+export const getVideoCallUrl = (calEvent: CalendarEvent): string => {
+  if (calEvent.videoCallData) {
+    if (isDailyVideoCall(calEvent)) {
+      return getPublicVideoCallUrl(calEvent);
+    }
+    return calEvent.videoCallData.url;
+  }
+  if (calEvent.additionalInformation?.hangoutLink) {
+    return calEvent.additionalInformation.hangoutLink;
+  }
+  return "";
+};
+
+export const getVideoCallPassword = (calEvent: CalendarEvent): string => {
+  return isDailyVideoCall(calEvent) ? "" : calEvent?.videoCallData?.password ?? "";
 };

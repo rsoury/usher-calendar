@@ -1,31 +1,35 @@
-import type { NextApiRequest, NextApiResponse } from "next";
+import type { NextApiRequest } from "next";
 import { stringify } from "querystring";
 
-import { BASE_URL } from "@calcom/lib/constants";
+import { WEBAPP_URL } from "@calcom/lib/constants";
+import { defaultHandler, defaultResponder } from "@calcom/lib/server";
 import prisma from "@calcom/prisma";
 
-const client_id = process.env.ZOOM_CLIENT_ID;
+import { getZoomAppKeys } from "../lib";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method === "GET") {
-    // Get user
-    await prisma.user.findFirst({
-      rejectOnNotFound: true,
-      where: {
-        id: req.session?.user?.id,
-      },
-      select: {
-        id: true,
-      },
-    });
+async function handler(req: NextApiRequest) {
+  // Get user
+  await prisma.user.findFirstOrThrow({
+    where: {
+      id: req.session?.user?.id,
+    },
+    select: {
+      id: true,
+    },
+  });
 
-    const params = {
-      response_type: "code",
-      client_id,
-      redirect_uri: BASE_URL + "/api/integrations/zoomvideo/callback",
-    };
-    const query = stringify(params);
-    const url = `https://zoom.us/oauth/authorize?${query}`;
-    res.status(200).json({ url });
-  }
+  const { client_id } = await getZoomAppKeys();
+
+  const params = {
+    response_type: "code",
+    client_id,
+    redirect_uri: WEBAPP_URL + "/api/integrations/zoomvideo/callback",
+  };
+  const query = stringify(params);
+  const url = `https://zoom.us/oauth/authorize?${query}`;
+  return { url };
 }
+
+export default defaultHandler({
+  GET: Promise.resolve({ default: defaultResponder(handler) }),
+});

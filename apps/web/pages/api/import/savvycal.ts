@@ -5,10 +5,17 @@ import { getSession } from "@lib/auth";
 
 const prisma = new PrismaClient();
 
+type SavvyCalEventType = {
+  name: string;
+  slug: string;
+  durations: [number];
+  description: string;
+  state: "active";
+};
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const session = await getSession({ req });
-  const authenticatedUser = await prisma.user.findFirst({
-    rejectOnNotFound: true,
+  const authenticatedUser = await prisma.user.findFirstOrThrow({
     where: {
       id: session?.user.id,
     },
@@ -50,14 +57,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       const eventTypesData = await eventTypesResult.json();
 
-      eventTypesData.entries.forEach(async (eventType: any) => {
+      eventTypesData.entries.forEach(async (eventType: SavvyCalEventType) => {
         await prisma.eventType.create({
           data: {
             title: eventType.name,
             slug: eventType.slug,
             length: eventType.durations[0],
             description: eventType.description.replace(/<[^>]*>?/gm, ""),
-            hidden: eventType.state === "active" ? true : false,
+            hidden: eventType.state === "active",
             users: {
               connect: {
                 id: authenticatedUser.id,

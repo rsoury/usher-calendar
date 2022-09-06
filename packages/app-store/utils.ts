@@ -1,18 +1,26 @@
 import { Prisma } from "@prisma/client";
 import { TFunction } from "next-i18next";
 
-import { LocationType } from "@calcom/lib/location";
-import type { App } from "@calcom/types/App";
+import { defaultLocations, EventLocationType, LocationType } from "@calcom/app-store/locations";
+import type { App, AppMeta } from "@calcom/types/App";
 
-import appStore from ".";
+// If you import this file on any app it should produce circular dependency
+// import appStore from "./index";
+import { appStoreMetadata } from "./apps.browser.generated";
 
-const ALL_APPS_MAP = Object.keys(appStore).reduce((store, key) => {
-  store[key] = appStore[key as keyof typeof appStore].metadata;
+const ALL_APPS_MAP = Object.keys(appStoreMetadata).reduce((store, key) => {
+  store[key] = appStoreMetadata[key as keyof typeof appStoreMetadata];
+  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+  //@ts-ignore
+  delete store[key]["/*"];
+  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+  //@ts-ignore
+  delete store[key]["__createdUsingCli"];
   return store;
-}, {} as Record<string, App>);
+}, {} as Record<string, AppMeta>);
 
 const credentialData = Prisma.validator<Prisma.CredentialArgs>()({
-  select: { id: true, type: true, key: true, userId: true },
+  select: { id: true, type: true, key: true, userId: true, appId: true },
 });
 
 type CredentialData = Prisma.CredentialGetPayload<typeof credentialData>;
@@ -21,7 +29,7 @@ export const ALL_APPS = Object.values(ALL_APPS_MAP);
 
 type OptionTypeBase = {
   label: string;
-  value: LocationType;
+  value: EventLocationType["type"];
   disabled?: boolean;
 };
 
@@ -32,24 +40,25 @@ function translateLocations(locations: OptionTypeBase[], t: TFunction) {
   }));
 }
 
-export function getLocationOptions(integrations: AppMeta, t: TFunction) {
-  const defaultLocations: OptionTypeBase[] = [
-    { value: LocationType.InPerson, label: "in_person_meeting" },
-    { value: LocationType.Link, label: "link_meeting" },
-    { value: LocationType.Phone, label: "phone_call" },
-  ];
-
+export function getLocationOptions(integrations: ReturnType<typeof getApps>, t: TFunction) {
+  const locations: OptionTypeBase[] = [];
+  defaultLocations.forEach((l) => {
+    locations.push({
+      label: l.label,
+      value: l.type,
+    });
+  });
   integrations.forEach((app) => {
     if (app.locationOption) {
-      defaultLocations.push(app.locationOption);
+      locations.push(app.locationOption);
     }
   });
 
-  return translateLocations(defaultLocations, t);
+  return translateLocations(locations, t);
 }
 
 /**
- * This should get all avaialable apps to the user based on his saved
+ * This should get all available apps to the user based on his saved
  * credentials, this should also get globally available apps.
  */
 function getApps(userCredentials: CredentialData[]) {
@@ -64,14 +73,15 @@ function getApps(userCredentials: CredentialData[]) {
         type: appMeta.type,
         key: appMeta.key!,
         userId: +new Date().getTime(),
+        appId: appMeta.slug,
       });
     }
 
     /** Check if app has location option AND add it if user has credentials for it */
-    if (credentials.length > 0 && appMeta?.locationType) {
+    if (credentials.length > 0 && appMeta?.appData?.location) {
       locationOption = {
-        value: appMeta.locationType as LocationType,
-        label: appMeta.label,
+        value: appMeta.appData.location.type,
+        label: appMeta.appData.location.label || "No label set",
         disabled: false,
       };
     }
@@ -92,28 +102,12 @@ function getApps(userCredentials: CredentialData[]) {
   return apps;
 }
 
-export type AppMeta = ReturnType<typeof getApps>;
-
-/** @deprecated use `getApps`  */
-export function hasIntegration(apps: AppMeta, type: string): boolean {
-  return !!apps.find((app) => app.type === type && !!app.installed && app.credentials.length > 0);
-}
-
 export function hasIntegrationInstalled(type: App["type"]): boolean {
   return ALL_APPS.some((app) => app.type === type && !!app.installed);
 }
 
-export function getLocationTypes(): string[] {
-  return ALL_APPS.reduce((locations, app) => {
-    if (typeof app.locationType === "string") {
-      locations.push(app.locationType);
-    }
-    return locations;
-  }, [] as string[]);
-}
-
-export function getAppName(name: string) {
-  return ALL_APPS_MAP[name as keyof typeof ALL_APPS_MAP]?.name || "No App Name";
+export function getAppName(name: string): string | null {
+  return ALL_APPS_MAP[name as keyof typeof ALL_APPS_MAP]?.name ?? null;
 }
 
 export function getAppType(name: string): string {

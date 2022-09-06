@@ -1,19 +1,35 @@
-import { IdentityProvider } from "@prisma/client";
+import { IdentityProvider, UserPermissionRole } from "@prisma/client";
+import { readFileSync } from "fs";
+import Handlebars from "handlebars";
 import NextAuth, { Session } from "next-auth";
 import { Provider } from "next-auth/providers";
 import CredentialsProvider from "next-auth/providers/credentials";
+import EmailProvider from "next-auth/providers/email";
 import GoogleProvider from "next-auth/providers/google";
+import nodemailer, { TransportOptions } from "nodemailer";
 import { authenticator } from "otplib";
+import path from "path";
 
+import checkLicense from "@calcom/features/ee/common/server/checkLicense";
+import ImpersonationProvider from "@calcom/features/ee/impersonation/lib/ImpersonationProvider";
+import { WEBAPP_URL } from "@calcom/lib/constants";
 import { symmetricDecrypt } from "@calcom/lib/crypto";
+import { defaultCookies } from "@calcom/lib/default-cookies";
+import rateLimit from "@calcom/lib/rateLimit";
+import { serverConfig } from "@calcom/lib/serverConfig";
+import prisma from "@calcom/prisma";
 
 import { ErrorCode, verifyPassword } from "@lib/auth";
-import prisma from "@lib/prisma";
+import CalComAdapter from "@lib/auth/next-auth-custom-adapter";
 import { randomString } from "@lib/random";
-import { isSAMLLoginEnabled, samlLoginUrl, hostedCal } from "@lib/saml";
+import { hostedCal, isSAMLLoginEnabled, samlLoginUrl } from "@lib/saml";
 import slugify from "@lib/slugify";
 
 import { GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, IS_GOOGLE_LOGIN_ENABLED } from "@server/lib/constants";
+
+const transporter = nodemailer.createTransport<TransportOptions>({
+  ...(serverConfig.transport as TransportOptions),
+} as TransportOptions);
 
 const usernameSlug = (username: string) => slugify(username) + "-" + randomString(6).toLowerCase();
 
@@ -85,14 +101,21 @@ const providers: Provider[] = [
         }
       }
 
+      const limiter = rateLimit({
+        intervalInMs: 60 * 1000, // 1 minute
+      });
+      await limiter.check(10, user.email); // 10 requests per minute
+
       return {
         id: user.id,
         username: user.username,
         email: user.email,
         name: user.name,
+        role: user.role,
       };
     },
   }),
+  ImpersonationProvider,
 ];
 
 if (IS_GOOGLE_LOGIN_ENABLED) {
@@ -141,40 +164,75 @@ if (isSAMLLoginEnabled) {
   });
 }
 
+if (true) {
+  const emailsDir = path.resolve(process.cwd(), "..", "..", "packages/emails", "templates");
+  providers.push(
+    EmailProvider({
+      type: "email",
+      maxAge: 10 * 60 * 60, // Magic links are valid for 10 min only
+      // Here we setup the sendVerificationRequest that calls the email template with the identifier (email) and token to verify.
+      sendVerificationRequest: ({ identifier, url }) => {
+        const originalUrl = new URL(url);
+        const webappUrl = new URL(WEBAPP_URL);
+        if (originalUrl.origin !== webappUrl.origin) {
+          url = url.replace(originalUrl.origin, webappUrl.origin);
+        }
+        const emailFile = readFileSync(path.join(emailsDir, "confirm-email.html"), {
+          encoding: "utf8",
+        });
+        const emailTemplate = Handlebars.compile(emailFile);
+        transporter.sendMail({
+          from: `${process.env.EMAIL_FROM}` || "Cal.com",
+          to: identifier,
+          subject: "Your sign-in link for Cal.com",
+          html: emailTemplate({
+            base_url: WEBAPP_URL,
+            signin_url: url,
+            email: identifier,
+          }),
+        });
+      },
+    })
+  );
+}
+const calcomAdapter = CalComAdapter(prisma);
 export default NextAuth({
+  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+  // @ts-ignore
+  adapter: calcomAdapter,
   session: {
     strategy: "jwt",
   },
-  secret: process.env.JWT_SECRET,
+  cookies: defaultCookies(WEBAPP_URL?.startsWith("https://")),
   pages: {
     signIn: "/auth/login",
     signOut: "/auth/logout",
     error: "/auth/error", // Error code passed in query string as ?error=
+    verifyRequest: "/auth/verify",
+    // newUser: "/auth/new", // New users will be directed here on first sign in (leave the property out if not of interest)
   },
   providers,
   callbacks: {
     async jwt({ token, user, account }) {
       const autoMergeIdentities = async () => {
-        if (!hostedCal) {
-          const existingUser = await prisma.user.findFirst({
-            where: { email: token.email! },
-          });
+        const existingUser = await prisma.user.findFirst({
+          // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+          where: { email: token.email! },
+        });
 
-          if (!existingUser) {
-            return token;
-          }
-
-          return {
-            id: existingUser.id,
-            username: existingUser.username,
-            name: existingUser.name,
-            email: existingUser.email,
-          };
+        if (!existingUser) {
+          return token;
         }
 
-        return token;
+        return {
+          id: existingUser.id,
+          username: existingUser.username,
+          name: existingUser.name,
+          email: existingUser.email,
+          role: existingUser.role,
+          impersonatedByUID: token?.impersonatedByUID as number,
+        };
       };
-
       if (!user) {
         return await autoMergeIdentities();
       }
@@ -185,6 +243,8 @@ export default NextAuth({
           name: user.name,
           username: user.username,
           email: user.email,
+          role: user.role,
+          impersonatedByUID: user?.impersonatedByUID as number,
         };
       }
 
@@ -195,7 +255,6 @@ export default NextAuth({
         if (account.provider === "saml") {
           idP = IdentityProvider.SAML;
         }
-
         const existingUser = await prisma.user.findFirst({
           where: {
             AND: [
@@ -218,24 +277,35 @@ export default NextAuth({
           name: existingUser.name,
           username: existingUser.username,
           email: existingUser.email,
+          role: existingUser.role,
+          impersonatedByUID: token.impersonatedByUID as number,
         };
       }
 
       return token;
     },
     async session({ session, token }) {
+      const hasValidLicense = await checkLicense(process.env.CALCOM_LICENSE_KEY || "");
       const calendsoSession: Session = {
         ...session,
+        hasValidLicense,
         user: {
           ...session.user,
           id: token.id as number,
           name: token.name,
           username: token.username as string,
+          role: token.role as UserPermissionRole,
+          impersonatedByUID: token.impersonatedByUID as number,
         },
       };
       return calendsoSession;
     },
-    async signIn({ user, account, profile }) {
+    async signIn(params) {
+      const { user, account, profile } = params;
+
+      if (account.provider === "email") {
+        return true;
+      }
       // In this case we've already verified the credentials in the authorize
       // callback so we can sign the user in.
       if (account.type === "credentials") {
@@ -259,15 +329,25 @@ export default NextAuth({
         if (account.provider === "saml") {
           idP = IdentityProvider.SAML;
         }
-        user.email_verified = user.email_verified || profile.email_verified;
+        user.email_verified = user.email_verified || user.emailVerified || profile.email_verified;
 
         if (!user.email_verified) {
           return "/auth/error?error=unverified-email";
         }
+        // Only google oauth on this path
+        const provider = account.provider.toUpperCase() as IdentityProvider;
 
         const existingUser = await prisma.user.findFirst({
+          include: {
+            accounts: {
+              where: {
+                provider: account.provider,
+              },
+            },
+          },
           where: {
-            AND: [{ identityProvider: idP }, { identityProviderId: user.id as string }],
+            identityProvider: provider,
+            identityProviderId: account.providerAccountId,
           },
         });
 
@@ -275,6 +355,17 @@ export default NextAuth({
           // In this case there's an existing user and their email address
           // hasn't changed since they last logged in.
           if (existingUser.email === user.email) {
+            try {
+              // If old user without Account entry we link their google account
+              if (existingUser.accounts.length === 0) {
+                const linkAccountWithUserData = { ...account, userId: existingUser.id };
+                await calcomAdapter.linkAccount(linkAccountWithUserData);
+              }
+            } catch (error) {
+              if (error instanceof Error) {
+                console.error("Error while linking account of already existing user");
+              }
+            }
             return true;
           }
 
@@ -335,7 +426,7 @@ export default NextAuth({
           return "/auth/error?error=use-identity-login";
         }
 
-        await prisma.user.create({
+        const newUser = await prisma.user.create({
           data: {
             // Slugify the incoming name and append a few random characters to
             // prevent conflicts for users with the same name.
@@ -347,11 +438,20 @@ export default NextAuth({
             identityProviderId: user.id as string,
           },
         });
+        const linkAccountNewUserData = { ...account, userId: newUser.id };
+        await calcomAdapter.linkAccount(linkAccountNewUserData);
 
         return true;
       }
 
       return false;
+    },
+    async redirect({ url, baseUrl }) {
+      // Allows relative callback URLs
+      if (url.startsWith("/")) return `${baseUrl}${url}`;
+      // Allows callback URLs on the same domain
+      else if (new URL(url).hostname === new URL(WEBAPP_URL).hostname) return url;
+      return baseUrl;
     },
   },
 });

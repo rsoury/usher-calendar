@@ -4,8 +4,12 @@
     "module": "ESNext",
     "moduleResolution": "Node",
     "baseUrl": ".",
-    "jsx": "preserve"
+    "declaration": true,
+    "jsx": "preserve",
+    "paths": {
+      "@lib/*": ["../../../apps/web/lib/*"]
+    }
   },
-  "include": ["."],
-  "exclude": ["dist", "build", "node_modules"]
+  "include": ["src", "env.d.ts"],
+  "exclude": ["dist", "build", "node_modules", "test-cal.tsx"]
 }

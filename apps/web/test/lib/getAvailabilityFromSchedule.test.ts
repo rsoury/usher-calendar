@@ -1,13 +1,11 @@
 import { expect, it } from "@jest/globals";
-import dayjs from "dayjs";
-import customParseFormat from "dayjs/plugin/customParseFormat";
+import { Availability } from "@prisma/client";
 import MockDate from "mockdate";
 
-import { Availability } from "@calcom/prisma/client";
+import dayjs from "@calcom/dayjs";
 
 import { getAvailabilityFromSchedule } from "@lib/availability";
 
-dayjs.extend(customParseFormat);
 MockDate.set("2021-06-20T11:59:59Z");
 
 //parse "hh:mm-hh:mm" into <Availability> object

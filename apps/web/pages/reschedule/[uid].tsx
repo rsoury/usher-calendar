@@ -1,7 +1,9 @@
 import { GetServerSidePropsContext } from "next";
 
+import { getDefaultEvent } from "@calcom/lib/defaultEvents";
+import prisma, { bookingMinimalSelect } from "@calcom/prisma";
+
 import { asStringOrUndefined } from "@lib/asStringOrNull";
-import prisma from "@lib/prisma";
 
 export default function Type() {
   // Just redirect to the schedule page to reschedule it.
@@ -14,7 +16,7 @@ export async function getServerSideProps(context: GetServerSidePropsContext) {
       uid: asStringOrUndefined(context.query.uid),
     },
     select: {
-      id: true,
+      ...bookingMinimalSelect,
       eventType: {
         select: {
           users: {
@@ -30,25 +32,36 @@ export async function getServerSideProps(context: GetServerSidePropsContext) {
           },
         },
       },
+      dynamicEventSlugRef: true,
+      dynamicGroupSlugRef: true,
       user: true,
-      title: true,
-      description: true,
-      startTime: true,
-      endTime: true,
-      attendees: true,
     },
   });
+  const dynamicEventSlugRef = booking?.dynamicEventSlugRef || "";
 
-  if (!booking?.eventType) throw Error("This booking doesn't exists");
+  if (!booking) {
+    return {
+      notFound: true,
+    };
+  }
 
-  const eventType = booking.eventType;
+  if (!booking?.eventType && !booking?.dynamicEventSlugRef) {
+    // TODO: Show something in UI to let user know that this booking is not rescheduleable.
+    return {
+      notFound: true,
+    };
+  }
+
+  const eventType = booking.eventType ? booking.eventType : getDefaultEvent(dynamicEventSlugRef);
 
   const eventPage =
     (eventType.team
       ? "team/" + eventType.team.slug
+      : dynamicEventSlugRef
+      ? booking.dynamicGroupSlugRef
       : booking.user?.username || "rick") /* This shouldn't happen */ +
     "/" +
-    booking.eventType.slug;
+    eventType?.slug;
 
   return {
     redirect: {

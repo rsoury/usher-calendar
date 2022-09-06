@@ -2,6 +2,7 @@
 
 # .env file
 .env
+!packages/prisma/.env
 
 # dependencies
 node_modules
@@ -11,11 +12,11 @@ node_modules
 # testing
 coverage
 /test-results/
-playwright/videos
-playwright/screenshots
-playwright/artifacts
-playwright/results
-playwright/reports/*
+**/playwright/videos
+**/playwright/screenshots
+**/playwright/artifacts
+**/playwright/results
+**/playwright/reports/*
 
 # next.js
 .next/
@@ -39,6 +40,7 @@ yarn-error.log*
 .env.production.local
 .env.*
 !.env.example
+!.env.appStore.example
 
 # vercel
 .vercel
@@ -71,3 +73,10 @@ dist
 
 # Linting
 lint-results
+
+#Storybook
+apps/storybook/build-storybook.log
+
+# Snaplet
+.snaplet/snapshots
+.snaplet/structure.d.ts

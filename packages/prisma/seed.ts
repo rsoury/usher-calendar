@@ -1,13 +1,15 @@
-import { MembershipRole, Prisma, PrismaClient, UserPlan } from "@prisma/client";
-import dayjs from "dayjs";
+import { BookingStatus, MembershipRole, Prisma, UserPermissionRole, UserPlan } from "@prisma/client";
 import { uuid } from "short-uuid";
 
+import dailyMeta from "@calcom/app-store/dailyvideo/_metadata";
+import googleMeetMeta from "@calcom/app-store/googlevideo/_metadata";
+import zoomMeta from "@calcom/app-store/zoomvideo/_metadata";
+import dayjs from "@calcom/dayjs";
 import { hashPassword } from "@calcom/lib/auth";
 import { DEFAULT_SCHEDULE, getAvailabilityFromSchedule } from "@calcom/lib/availability";
 
-require("dotenv").config({ path: "../../.env" });
-
-const prisma = new PrismaClient();
+import prisma from ".";
+import mainAppStore from "./seed-app-store";
 
 async function createUserAndEventType(opts: {
   user: {
@@ -18,6 +20,7 @@ async function createUserAndEventType(opts: {
     name: string;
     completedOnboarding?: boolean;
     timeZone?: string;
+    role?: UserPermissionRole;
   };
   eventTypes: Array<
     Prisma.EventTypeCreateInput & {
@@ -86,7 +89,7 @@ async function createUserAndEventType(opts: {
     });
 
     console.log(
-      `\t📆 Event type ${eventTypeData.slug}, length ${eventTypeData.length}min - ${process.env.NEXT_PUBLIC_WEBAPP_URL}/${user.username}/${eventTypeData.slug}`
+      `\t📆 Event type ${eventTypeData.slug} with id ${id}, length ${eventTypeData.length}min - ${process.env.NEXT_PUBLIC_WEBAPP_URL}/${user.username}/${eventTypeData.slug}`
     );
     for (const bookingInput of bookingInputs) {
       await prisma.booking.create({
@@ -109,7 +112,7 @@ async function createUserAndEventType(opts: {
               id,
             },
           },
-          confirmed: bookingInput.confirmed,
+          status: bookingInput.status,
         },
       });
       console.log(
@@ -237,7 +240,7 @@ async function main() {
             title: "30min",
             startTime: dayjs().add(2, "day").toDate(),
             endTime: dayjs().add(2, "day").add(30, "minutes").toDate(),
-            confirmed: false,
+            status: BookingStatus.PENDING,
           },
         ],
       },
@@ -250,7 +253,7 @@ async function main() {
         title: "paid",
         slug: "paid",
         length: 60,
-        price: 50,
+        price: 100,
       },
       {
         title: "In person meeting",
@@ -262,19 +265,124 @@ async function main() {
         title: "Zoom Event",
         slug: "zoom",
         length: 60,
-        locations: [{ type: "integrations:zoom" }],
+        locations: [{ type: zoomMeta.appData?.location.type }],
       },
       {
         title: "Daily Event",
         slug: "daily",
         length: 60,
-        locations: [{ type: "integrations:daily" }],
+        locations: [{ type: dailyMeta.appData?.location.type }],
       },
       {
         title: "Google Meet",
         slug: "google-meet",
         length: 60,
-        locations: [{ type: "integrations:google:meet" }],
+        locations: [{ type: googleMeetMeta.appData?.location.type }],
+      },
+      {
+        title: "Yoga class",
+        slug: "yoga-class",
+        length: 30,
+        recurringEvent: { freq: 2, count: 12, interval: 1 },
+        _bookings: [
+          {
+            uid: uuid(),
+            title: "Yoga class",
+            recurringEventId: Buffer.from("yoga-class").toString("base64"),
+            startTime: dayjs().add(1, "day").toDate(),
+            endTime: dayjs().add(1, "day").add(30, "minutes").toDate(),
+            status: BookingStatus.PENDING,
+          },
+          {
+            uid: uuid(),
+            title: "Yoga class",
+            recurringEventId: Buffer.from("yoga-class").toString("base64"),
+            startTime: dayjs().add(1, "day").add(1, "week").toDate(),
+            endTime: dayjs().add(1, "day").add(1, "week").add(30, "minutes").toDate(),
+            status: BookingStatus.PENDING,
+          },
+          {
+            uid: uuid(),
+            title: "Yoga class",
+            recurringEventId: Buffer.from("yoga-class").toString("base64"),
+            startTime: dayjs().add(1, "day").add(2, "week").toDate(),
+            endTime: dayjs().add(1, "day").add(2, "week").add(30, "minutes").toDate(),
+            status: BookingStatus.PENDING,
+          },
+          {
+            uid: uuid(),
+            title: "Yoga class",
+            recurringEventId: Buffer.from("yoga-class").toString("base64"),
+            startTime: dayjs().add(1, "day").add(3, "week").toDate(),
+            endTime: dayjs().add(1, "day").add(3, "week").add(30, "minutes").toDate(),
+            status: BookingStatus.PENDING,
+          },
+          {
+            uid: uuid(),
+            title: "Yoga class",
+            recurringEventId: Buffer.from("yoga-class").toString("base64"),
+            startTime: dayjs().add(1, "day").add(4, "week").toDate(),
+            endTime: dayjs().add(1, "day").add(4, "week").add(30, "minutes").toDate(),
+            status: BookingStatus.PENDING,
+          },
+          {
+            uid: uuid(),
+            title: "Yoga class",
+            recurringEventId: Buffer.from("yoga-class").toString("base64"),
+            startTime: dayjs().add(1, "day").add(5, "week").toDate(),
+            endTime: dayjs().add(1, "day").add(5, "week").add(30, "minutes").toDate(),
+            status: BookingStatus.PENDING,
+          },
+        ],
+      },
+      {
+        title: "Tennis class",
+        slug: "tennis-class",
+        length: 60,
+        recurringEvent: { freq: 2, count: 10, interval: 2 },
+        requiresConfirmation: true,
+        _bookings: [
+          {
+            uid: uuid(),
+            title: "Tennis class",
+            recurringEventId: Buffer.from("tennis-class").toString("base64"),
+            startTime: dayjs().add(2, "day").toDate(),
+            endTime: dayjs().add(2, "day").add(60, "minutes").toDate(),
+            status: BookingStatus.PENDING,
+          },
+          {
+            uid: uuid(),
+            title: "Tennis class",
+            recurringEventId: Buffer.from("tennis-class").toString("base64"),
+            startTime: dayjs().add(2, "day").add(2, "week").toDate(),
+            endTime: dayjs().add(2, "day").add(2, "week").add(60, "minutes").toDate(),
+            status: BookingStatus.PENDING,
+          },
+          {
+            uid: uuid(),
+            title: "Tennis class",
+            recurringEventId: Buffer.from("tennis-class").toString("base64"),
+            startTime: dayjs().add(2, "day").add(4, "week").toDate(),
+            endTime: dayjs().add(2, "day").add(4, "week").add(60, "minutes").toDate(),
+            status: BookingStatus.PENDING,
+          },
+          {
+            uid: uuid(),
+            title: "Tennis class",
+            recurringEventId: Buffer.from("tennis-class").toString("base64"),
+            startTime: dayjs().add(2, "day").add(8, "week").toDate(),
+            endTime: dayjs().add(2, "day").add(8, "week").add(60, "minutes").toDate(),
+            status: BookingStatus.PENDING,
+          },
+          {
+            uid: uuid(),
+            title: "Tennis class",
+            recurringEventId: Buffer.from("tennis-class").toString("base64"),
+            startTime: dayjs().add(2, "day").add(10, "week").toDate(),
+            endTime: dayjs().add(2, "day").add(10, "week").add(60, "minutes").toDate(),
+            status: BookingStatus.PENDING,
+          },
+        ],
       },
     ],
   });
@@ -363,6 +471,18 @@ async function main() {
     eventTypes: [],
   });
 
+  await createUserAndEventType({
+    user: {
+      email: "admin@example.com",
+      password: "admin",
+      username: "admin",
+      name: "Admin Example",
+      plan: "PRO",
+      role: "ADMIN",
+    },
+    eventTypes: [],
+  });
+
   const pro2UserTeam = await createUserAndEventType({
     user: {
       email: "teampro2@example.com",
@@ -431,6 +551,7 @@ async function main() {
       {
         id: pro2UserTeam.id,
         username: pro2UserTeam.name || "Unknown",
+        role: "MEMBER",
       },
       {
         id: pro3UserTeam.id,
@@ -445,6 +566,7 @@ async function main() {
 }
 
 main()
+  .then(() => mainAppStore())
   .catch((e) => {
     console.error(e);
     process.exit(1);

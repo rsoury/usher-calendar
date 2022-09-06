@@ -1,8 +1,10 @@
 {
   "extends": "@calcom/tsconfig/base.json",
   "compilerOptions": {
-    "baseUrl": "."
+    "baseUrl": ".",
+    "target": "es5",
+    "lib": ["dom", "dom.iterable", "esnext"]
   },
-  "include": ["."],
+  "include": [".", "../types/*.d.ts"],
   "exclude": ["dist", "build", "node_modules"]
 }

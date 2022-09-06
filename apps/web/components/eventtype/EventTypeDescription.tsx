@@ -1,21 +1,16 @@
-import { ClockIcon, CreditCardIcon, UserIcon, UsersIcon } from "@heroicons/react/solid";
-import { SchedulingType } from "@prisma/client";
-import { Prisma } from "@prisma/client";
-import React from "react";
+import { Prisma, SchedulingType } from "@prisma/client";
+import { useMemo } from "react";
 import { FormattedNumber, IntlProvider } from "react-intl";
 
+import { parseRecurringEvent } from "@calcom/lib";
+import { useLocale } from "@calcom/lib/hooks/useLocale";
+import { baseEventTypeSelect } from "@calcom/prisma/selects";
+import { Icon } from "@calcom/ui/Icon";
+
 import classNames from "@lib/classNames";
-import { useLocale } from "@lib/hooks/useLocale";
 
 const eventTypeData = Prisma.validator<Prisma.EventTypeArgs>()({
-  select: {
-    id: true,
-    length: true,
-    price: true,
-    currency: true,
-    schedulingType: true,
-    description: true,
-  },
+  select: baseEventTypeSelect,
 });
 
 type EventType = Prisma.EventTypeGetPayload<typeof eventTypeData>;
@@ -28,35 +23,48 @@ export type EventTypeDescriptionProps = {
 export const EventTypeDescription = ({ eventType, className }: EventTypeDescriptionProps) => {
   const { t } = useLocale();
 
+  const recurringEvent = useMemo(
+    () => parseRecurringEvent(eventType.recurringEvent),
+    [eventType.recurringEvent]
+  );
+
   return (
     <>
-      <div className={classNames("text-neutral-500 dark:text-white", className)}>
+      <div className={classNames("text-gray-600 dark:text-white", className)}>
         {eventType.description && (
           <h2 className="max-w-[280px] overflow-hidden text-ellipsis opacity-60 sm:max-w-[500px]">
             {eventType.description.substring(0, 100)}
             {eventType.description.length > 100 && "..."}
           </h2>
         )}
-        <ul className="mt-2 flex space-x-4 rtl:space-x-reverse ">
-          <li className="flex whitespace-nowrap">
-            <ClockIcon className="mt-0.5 mr-1.5 inline h-4 w-4 text-neutral-400" aria-hidden="true" />
-            {eventType.length}m
+        <ul className="mt-2 flex flex-wrap space-x-1 sm:flex-nowrap ">
+          <li className="mb-1 flex items-center whitespace-nowrap rounded-sm bg-gray-100 px-1 py-px text-xs text-gray-800 dark:bg-gray-900 dark:text-white">
+            <Icon.FiClock className="mr-1.5 inline h-3 w-3" aria-hidden="true" />
+            {eventType.length} {t("minutes")}
           </li>
           {eventType.schedulingType ? (
-            <li className="flex whitespace-nowrap">
-              <UsersIcon className="mt-0.5 mr-1.5 inline h-4 w-4 text-neutral-400" aria-hidden="true" />
+            <li className="mb-1 flex items-center whitespace-nowrap rounded-sm bg-gray-100 px-1 py-px text-xs text-gray-800 dark:bg-gray-900 dark:text-white">
+              <Icon.FiUsers className="mr-1.5 inline h-3 w-3" aria-hidden="true" />
               {eventType.schedulingType === SchedulingType.ROUND_ROBIN && t("round_robin")}
               {eventType.schedulingType === SchedulingType.COLLECTIVE && t("collective")}
             </li>
           ) : (
-            <li className="flex whitespace-nowrap">
-              <UserIcon className="mt-0.5 mr-1.5 inline h-4 w-4 text-neutral-400" aria-hidden="true" />
+            <li className="mb-1 flex items-center whitespace-nowrap rounded-sm bg-gray-100 px-1 py-px text-xs text-gray-800 dark:bg-gray-900 dark:text-white">
+              <Icon.FiUser className="mr-1.5 inline h-3 w-3" aria-hidden="true" />
               {t("1_on_1")}
             </li>
           )}
+          {recurringEvent?.count && recurringEvent.count > 0 && (
+            <li className="mb-1 flex items-center whitespace-nowrap rounded-sm bg-gray-100 px-1 py-px text-xs text-gray-800 dark:bg-gray-900 dark:text-white">
+              <Icon.FiRefreshCw className="mr-1.5 inline h-3 w-3" aria-hidden="true" />
+              {t("repeats_up_to", {
+                count: recurringEvent.count,
+              })}
+            </li>
+          )}
           {eventType.price > 0 && (
-            <li className="flex whitespace-nowrap">
-              <CreditCardIcon className="mt-0.5 mr-1.5 inline h-4 w-4 text-neutral-400" aria-hidden="true" />
+            <li className="mb-1 flex items-center whitespace-nowrap rounded-sm bg-gray-100 px-1 py-px text-xs text-gray-800 dark:bg-gray-900 dark:text-white">
+              <Icon.FiCreditCard className="mr-1.5 inline h-3 w-3" aria-hidden="true" />
               <IntlProvider locale="en">
                 <FormattedNumber
                   value={eventType.price / 100.0}
@@ -64,6 +72,12 @@ export const EventTypeDescription = ({ eventType, className }: EventTypeDescript
                   currency={eventType.currency.toUpperCase()}
                 />
               </IntlProvider>
+            </li>
+          )}
+          {eventType.requiresConfirmation && (
+            <li className="mb-1 flex items-center whitespace-nowrap rounded-sm bg-gray-100 px-1 py-px text-xs text-gray-800 dark:bg-gray-900 dark:text-white">
+              <Icon.FiCheckSquare className="mr-1.5 inline h-3 w-3" aria-hidden="true" />
+              {t("requires_confirmation")}
             </li>
           )}
         </ul>

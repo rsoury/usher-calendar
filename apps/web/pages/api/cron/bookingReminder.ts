@@ -1,11 +1,11 @@
-import { ReminderType } from "@prisma/client";
-import dayjs from "dayjs";
+import { BookingStatus, ReminderType } from "@prisma/client";
 import type { NextApiRequest, NextApiResponse } from "next";
 
+import dayjs from "@calcom/dayjs";
+import { sendOrganizerRequestReminderEmail } from "@calcom/emails";
+import { isPrismaObjOrUndefined, parseRecurringEvent } from "@calcom/lib";
+import prisma, { bookingMinimalSelect } from "@calcom/prisma";
 import type { CalendarEvent } from "@calcom/types/Calendar";
-
-import { sendOrganizerRequestReminderEmail } from "@lib/emails/email-manager";
-import prisma from "@lib/prisma";
 
 import { getTranslation } from "@server/lib/i18n";
 
@@ -25,19 +25,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   for (const interval of reminderIntervalMinutes) {
     const bookings = await prisma.booking.findMany({
       where: {
-        confirmed: false,
-        rejected: false,
+        status: BookingStatus.PENDING,
         createdAt: {
           lte: dayjs().add(-interval, "minutes").toDate(),
         },
+        // Only send reminders if the event hasn't finished
+        endTime: { gte: new Date() },
       },
       select: {
-        title: true,
-        description: true,
+        ...bookingMinimalSelect,
         location: true,
-        startTime: true,
-        endTime: true,
-        attendees: true,
         user: {
           select: {
             email: true,
@@ -48,7 +45,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             destinationCalendar: true,
           },
         },
-        id: true,
+        eventType: {
+          select: {
+            recurringEvent: true,
+          },
+        },
         uid: true,
         destinationCalendar: true,
       },
@@ -94,6 +95,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         type: booking.title,
         title: booking.title,
         description: booking.description || undefined,
+        customInputs: isPrismaObjOrUndefined(booking.customInputs),
         location: booking.location ?? "",
         startTime: booking.startTime.toISOString(),
         endTime: booking.endTime.toISOString(),
@@ -105,6 +107,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         },
         attendees: attendeesList,
         uid: booking.uid,
+        recurringEvent: parseRecurringEvent(booking.eventType?.recurringEvent),
         destinationCalendar: booking.destinationCalendar || user.destinationCalendar,
       };
 

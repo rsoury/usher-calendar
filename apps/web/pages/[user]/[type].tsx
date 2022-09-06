@@ -1,75 +1,208 @@
-import { Prisma } from "@prisma/client";
-import { GetServerSidePropsContext } from "next";
+import { UserPlan } from "@prisma/client";
+import { GetStaticPaths, GetStaticPropsContext } from "next";
 import { JSONObject } from "superjson/dist/types";
+import { z } from "zod";
 
-import { asStringOrNull } from "@lib/asStringOrNull";
-import { getWorkingHours } from "@lib/availability";
-import prisma from "@lib/prisma";
+import { privacyFilteredLocations, LocationObject } from "@calcom/app-store/locations";
+import { WEBAPP_URL } from "@calcom/lib/constants";
+import { getDefaultEvent, getGroupName, getUsernameList } from "@calcom/lib/defaultEvents";
+import { useLocale } from "@calcom/lib/hooks/useLocale";
+import { parseRecurringEvent } from "@calcom/lib/isRecurringEvent";
+import prisma from "@calcom/prisma";
+
 import { inferSSRProps } from "@lib/types/inferSSRProps";
 
 import AvailabilityPage from "@components/booking/pages/AvailabilityPage";
 
-import { ssrInit } from "@server/lib/ssr";
-
-export type AvailabilityPageProps = inferSSRProps<typeof getServerSideProps>;
+export type AvailabilityPageProps = inferSSRProps<typeof getStaticProps>;
 
 export default function Type(props: AvailabilityPageProps) {
-  return <AvailabilityPage {...props} />;
+  const { t } = useLocale();
+
+  return props.away ? (
+    <div className="h-screen dark:bg-neutral-900">
+      <main className="mx-auto max-w-3xl px-4 py-24">
+        <div className="space-y-6" data-testid="event-types">
+          <div className="overflow-hidden rounded-sm border dark:border-gray-900">
+            <div className="p-8 text-center text-gray-400 dark:text-white">
+              <h2 className="font-cal mb-2 text-3xl text-gray-600 dark:text-white">
+                😴{" " + t("user_away")}
+              </h2>
+              <p className="mx-auto max-w-md">{t("user_away_description")}</p>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+  ) : props.isDynamic && !props.profile.allowDynamicBooking ? (
+    <div className="dark:bg-darkgray-50 h-screen">
+      <main className="mx-auto max-w-3xl px-4 py-24">
+        <div className="space-y-6" data-testid="event-types">
+          <div className="overflow-hidden rounded-sm border dark:border-gray-900">
+            <div className="p-8 text-center text-gray-400 dark:text-white">
+              <h2 className="font-cal mb-2 text-3xl text-gray-600 dark:text-white">
+                {" " + t("unavailable")}
+              </h2>
+              <p className="mx-auto max-w-md">{t("user_dynamic_booking_disabled")}</p>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+  ) : (
+    <AvailabilityPage {...props} />
+  );
 }
 
-export const getServerSideProps = async (context: GetServerSidePropsContext) => {
-  const ssr = await ssrInit(context);
-  // get query params and typecast them to string
-  // (would be even better to assert them instead of typecasting)
-  const userParam = asStringOrNull(context.query.user);
-  const typeParam = asStringOrNull(context.query.type);
-  const dateParam = asStringOrNull(context.query.date);
+Type.isThemeSupported = true;
 
-  if (!userParam || !typeParam) {
-    throw new Error(`File is not named [type]/[user]`);
-  }
-
-  const eventTypeSelect = Prisma.validator<Prisma.EventTypeSelect>()({
-    id: true,
-    title: true,
-    availability: true,
-    description: true,
-    length: true,
-    price: true,
-    currency: true,
-    periodType: true,
-    periodStartDate: true,
-    periodEndDate: true,
-    periodDays: true,
-    periodCountCalendarDays: true,
-    schedulingType: true,
-    schedule: {
-      select: {
-        availability: true,
-        timeZone: true,
-      },
+async function getUserPageProps(context: GetStaticPropsContext) {
+  const { type: slug, user: username } = paramsSchema.parse(context.params);
+  const { ssgInit } = await import("@server/lib/ssg");
+  const ssg = await ssgInit(context);
+  const user = await prisma.user.findUnique({
+    where: {
+      username,
     },
-    minimumBookingNotice: true,
-    beforeEventBuffer: true,
-    afterEventBuffer: true,
-    timeZone: true,
-    metadata: true,
-    slotInterval: true,
-    users: {
-      select: {
-        avatar: true,
-        name: true,
-        username: true,
-        hideBranding: true,
-        plan: true,
-        timeZone: true,
+    select: {
+      id: true,
+      username: true,
+      away: true,
+      plan: true,
+      name: true,
+      hideBranding: true,
+      timeZone: true,
+      theme: true,
+      weekStart: true,
+      brandColor: true,
+      darkBrandColor: true,
+      eventTypes: {
+        select: { id: true },
+        // Order by position is important to ensure that the event-type that's enabled is the first in the list because for Free user only first is allowed.
+        orderBy: [
+          {
+            position: "desc",
+          },
+          {
+            id: "asc",
+          },
+        ],
       },
     },
   });
 
-  const user = await prisma.user.findUnique({
+  if (!user) return { notFound: true };
+
+  const eventTypeIds = user.eventTypes.map((e) => e.id);
+  const eventTypes = await prisma.eventType.findMany({
     where: {
-      username: userParam.toLowerCase(),
+      slug,
+      /* Free users can only display their first eventType */
+      id: user.plan === UserPlan.FREE ? eventTypeIds[0] : undefined,
+      OR: [{ userId: user.id }, { users: { some: { id: user.id } } }],
+    },
+    // Order is important to ensure that given a slug if there are duplicates, we choose the same event type consistently when showing in event-types list UI(in terms of ordering and disabled event types)
+    // TODO: If we can ensure that there are no duplicates for a [slug, userId] combination in existing data, this requirement might be avoided.
+    orderBy: [
+      {
+        position: "desc",
+      },
+      {
+        id: "asc",
+      },
+    ],
+    select: {
+      title: true,
+      slug: true,
+      hidden: true,
+      recurringEvent: true,
+      length: true,
+      locations: true,
+      id: true,
+      description: true,
+      price: true,
+      currency: true,
+      requiresConfirmation: true,
+      schedulingType: true,
+      metadata: true,
+      seatsPerTimeSlot: true,
+      users: {
+        select: {
+          name: true,
+          username: true,
+          hideBranding: true,
+          brandColor: true,
+          darkBrandColor: true,
+          theme: true,
+          plan: true,
+          allowDynamicBooking: true,
+          timeZone: true,
+        },
+      },
+    },
+  });
+
+  if (!eventTypes) return { notFound: true };
+
+  const [eventType] = eventTypes;
+
+  if (!eventType) return { notFound: true };
+
+  //TODO: Use zodSchema to verify it instead of using Type Assertion
+  const locations = eventType.locations ? (eventType.locations as LocationObject[]) : [];
+  const eventTypeObject = Object.assign({}, eventType, {
+    metadata: (eventType.metadata || {}) as JSONObject,
+    recurringEvent: parseRecurringEvent(eventType.recurringEvent),
+    locations: privacyFilteredLocations(locations),
+    users: eventType.users.map((user) => ({
+      name: user.name,
+      username: user.username,
+      hideBranding: user.hideBranding,
+      plan: user.plan,
+      timeZone: user.timeZone,
+    })),
+  });
+
+  const profile = eventType.users[0] || user;
+
+  return {
+    props: {
+      eventType: eventTypeObject,
+      profile: {
+        theme: user.theme,
+        name: user.name,
+        username: user.username,
+        hideBranding: user.hideBranding,
+        plan: user.plan,
+        timeZone: user.timeZone,
+        allowDynamicBooking: false,
+        weekStart: user.weekStart,
+        brandColor: user.brandColor,
+        darkBrandColor: user.darkBrandColor,
+        slug: `${profile.username}/${eventType.slug}`,
+        image: `${WEBAPP_URL}/${profile.username}/avatar.png`,
+      },
+      away: user?.away,
+      isDynamic: false,
+      trpcState: ssg.dehydrate(),
+    },
+    revalidate: 10, // seconds
+  };
+}
+
+async function getDynamicGroupPageProps(context: GetStaticPropsContext) {
+  const { ssgInit } = await import("@server/lib/ssg");
+  const ssg = await ssgInit(context);
+  const { type: typeParam, user: userParam } = paramsSchema.parse(context.params);
+  const usernameList = getUsernameList(userParam);
+  const length = parseInt(typeParam);
+  const eventType = getDefaultEvent("" + length);
+
+  const users = await prisma.user.findMany({
+    where: {
+      username: {
+        in: usernameList,
+      },
     },
     select: {
       id: true,
@@ -87,6 +220,8 @@ export const getServerSideProps = async (context: GetServerSidePropsContext) => 
       brandColor: true,
       darkBrandColor: true,
       defaultScheduleId: true,
+      allowDynamicBooking: true,
+      away: true,
       schedules: {
         select: {
           availability: true,
@@ -96,140 +231,73 @@ export const getServerSideProps = async (context: GetServerSidePropsContext) => 
       },
       theme: true,
       plan: true,
-      eventTypes: {
-        where: {
-          AND: [
-            {
-              slug: typeParam,
-            },
-            {
-              teamId: null,
-            },
-          ],
-        },
-        select: eventTypeSelect,
-      },
     },
   });
 
-  if (!user) {
+  if (!users.length) {
     return {
       notFound: true,
     };
   }
 
-  if (user.eventTypes.length !== 1) {
-    const eventTypeBackwardsCompat = await prisma.eventType.findFirst({
-      where: {
-        AND: [
-          {
-            userId: user.id,
-          },
-          {
-            slug: typeParam,
-          },
-        ],
-      },
-      select: eventTypeSelect,
-    });
-    if (!eventTypeBackwardsCompat) {
-      return {
-        notFound: true,
-      };
-    }
-
-    eventTypeBackwardsCompat.users.push({
-      avatar: user.avatar,
-      name: user.name,
-      username: user.username,
-      hideBranding: user.hideBranding,
-      plan: user.plan,
-      timeZone: user.timeZone,
-    });
-
-    user.eventTypes.push(eventTypeBackwardsCompat);
-  }
-
-  const [eventType] = user.eventTypes;
-
-  // check this is the first event
-  if (user.plan === "FREE") {
-    const firstEventType = await prisma.eventType.findFirst({
-      where: {
-        OR: [
-          {
-            userId: user.id,
-          },
-          {
-            users: {
-              some: {
-                id: user.id,
-              },
-            },
-          },
-        ],
-      },
-      orderBy: [
-        {
-          position: "desc",
-        },
-        {
-          id: "asc",
-        },
-      ],
-      select: {
-        id: true,
-      },
-    });
-    if (firstEventType?.id !== eventType.id) {
-      return {
-        notFound: true,
-      } as const;
-    }
-  }
-
+  const locations = eventType.locations ? (eventType.locations as LocationObject[]) : [];
   const eventTypeObject = Object.assign({}, eventType, {
     metadata: (eventType.metadata || {}) as JSONObject,
-    periodStartDate: eventType.periodStartDate?.toString() ?? null,
-    periodEndDate: eventType.periodEndDate?.toString() ?? null,
+    recurringEvent: parseRecurringEvent(eventType.recurringEvent),
+    locations: privacyFilteredLocations(locations),
+    users: users.map((user) => {
+      return {
+        name: user.name,
+        username: user.username,
+        hideBranding: user.hideBranding,
+        plan: user.plan,
+        timeZone: user.timeZone,
+      };
+    }),
   });
 
-  const schedule = eventType.schedule
-    ? { ...eventType.schedule }
-    : {
-        ...user.schedules.filter(
-          (schedule) => !user.defaultScheduleId || schedule.id === user.defaultScheduleId
-        )[0],
-      };
+  const dynamicNames = users.map((user) => {
+    return user.name || "";
+  });
 
-  const timeZone = schedule.timeZone || eventType.timeZone || user.timeZone;
-
-  const workingHours = getWorkingHours(
-    {
-      timeZone,
-    },
-    schedule.availability || (eventType.availability.length ? eventType.availability : user.availability)
-  );
-
-  eventTypeObject.schedule = null;
-  eventTypeObject.availability = [];
+  const profile = {
+    name: getGroupName(dynamicNames),
+    image: null,
+    slug: "" + length,
+    theme: null as string | null,
+    weekStart: "Sunday",
+    brandColor: "",
+    darkBrandColor: "",
+    allowDynamicBooking: !users.some((user) => {
+      return !user.allowDynamicBooking;
+    }),
+  };
 
   return {
     props: {
-      profile: {
-        name: user.name || user.username,
-        image: user.avatar,
-        slug: user.username,
-        theme: user.theme,
-        weekStart: user.weekStart,
-        brandColor: user.brandColor,
-        darkBrandColor: user.darkBrandColor,
-      },
-      date: dateParam,
       eventType: eventTypeObject,
-      workingHours,
-      trpcState: ssr.dehydrate(),
-      previousPage: context.req.headers.referer ?? null,
+      profile,
+      isDynamic: true,
+      away: false,
+      trpcState: ssg.dehydrate(),
     },
+    revalidate: 10, // seconds
   };
+}
+
+const paramsSchema = z.object({ type: z.string(), user: z.string() });
+
+export const getStaticProps = async (context: GetStaticPropsContext) => {
+  const { user: userParam } = paramsSchema.parse(context.params);
+  // dynamic groups are not generated at build time, but otherwise are probably cached until infinity.
+  const isDynamicGroup = userParam.includes("+");
+  if (isDynamicGroup) {
+    return await getDynamicGroupPageProps(context);
+  } else {
+    return await getUserPageProps(context);
+  }
+};
+
+export const getStaticPaths: GetStaticPaths = async () => {
+  return { paths: [], fallback: "blocking" };
 };

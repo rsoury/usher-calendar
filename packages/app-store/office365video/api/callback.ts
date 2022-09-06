@@ -1,20 +1,30 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 
-import { BASE_URL } from "@calcom/lib/constants";
+import { WEBAPP_URL } from "@calcom/lib/constants";
+import { getSafeRedirectUrl } from "@calcom/lib/getSafeRedirectUrl";
 import prisma from "@calcom/prisma";
 
 import { decodeOAuthState } from "../../_utils/decodeOAuthState";
+import getAppKeysFromSlug from "../../_utils/getAppKeysFromSlug";
 
 const scopes = ["OnlineMeetings.ReadWrite"];
 
+let client_id = "";
+let client_secret = "";
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { code } = req.query;
-  console.log("🚀 ~ file: callback.ts ~ line 14 ~ handler ~ code", req.query);
 
   if (typeof code !== "string") {
     res.status(400).json({ message: "No code returned" });
     return;
   }
+
+  const appKeys = await getAppKeysFromSlug("msteams");
+  if (typeof appKeys.client_id === "string") client_id = appKeys.client_id;
+  if (typeof appKeys.client_secret === "string") client_secret = appKeys.client_secret;
+  if (!client_id) return res.status(400).json({ message: "Office 365 client_id missing." });
+  if (!client_secret) return res.status(400).json({ message: "Office 365 client_secret missing." });
 
   const toUrlEncoded = (payload: Record<string, string>) =>
     Object.keys(payload)
@@ -22,12 +32,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .join("&");
 
   const body = toUrlEncoded({
-    client_id: process.env.MS_GRAPH_CLIENT_ID!,
+    client_id,
     grant_type: "authorization_code",
     code,
     scope: scopes.join(" "),
-    redirect_uri: BASE_URL + "/api/integrations/office365video/callback",
-    client_secret: process.env.MS_GRAPH_CLIENT_SECRET!,
+    redirect_uri: WEBAPP_URL + "/api/integrations/office365video/callback",
+    client_secret,
   });
 
   const response = await fetch("https://login.microsoftonline.com/common/oauth2/v2.0/token", {
@@ -54,14 +64,42 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   responseBody.expiry_date = Math.round(+new Date() / 1000 + responseBody.expires_in); // set expiry date in seconds
   delete responseBody.expires_in;
 
+  const userId = req.session?.user.id;
+  if (!userId) {
+    return res.status(404).json({ message: "No user found" });
+  }
+
+  /**
+   * With this we take care of no duplicate office365_video key for a single user
+   * when creating a video room we only do findFirst so the if they have more than 1
+   * others get ignored
+   * */
+  const existingCredentialOfficeVideo = await prisma.credential.findMany({
+    select: {
+      id: true,
+    },
+    where: {
+      type: "office365_video",
+      userId: req.session?.user.id,
+      appId: "msteams",
+    },
+  });
+
+  // Making sure we only delete office365_video
+  const credentialIdsToDelete = existingCredentialOfficeVideo.map((item) => item.id);
+  if (credentialIdsToDelete.length > 0) {
+    await prisma.credential.deleteMany({ where: { id: { in: credentialIdsToDelete }, userId } });
+  }
+
   await prisma.credential.create({
     data: {
       type: "office365_video",
       key: responseBody,
-      userId: req.session?.user.id,
+      userId,
+      appId: "msteams",
     },
   });
 
   const state = decodeOAuthState(req);
-  return res.redirect(state?.returnTo ?? "/apps/installed");
+  return res.redirect(getSafeRedirectUrl(state?.returnTo) ?? "/apps/installed");
 }

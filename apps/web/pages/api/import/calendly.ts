@@ -5,10 +5,17 @@ import { getSession } from "@lib/auth";
 
 const prisma = new PrismaClient();
 
+type CalendlyEventType = {
+  name: string;
+  slug: string;
+  duration: number;
+  description_plain: string;
+  secret: boolean;
+};
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const session = await getSession({ req });
-  const authenticatedUser = await prisma.user.findFirst({
-    rejectOnNotFound: true,
+  const authenticatedUser = await prisma.user.findFirstOrThrow({
     where: {
       id: session?.user.id,
     },
@@ -50,7 +57,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       const eventTypesData = await eventTypesResult.json();
 
-      eventTypesData.collection.forEach(async (eventType: any) => {
+      eventTypesData.collection.forEach(async (eventType: CalendlyEventType) => {
         await prisma.eventType.create({
           data: {
             title: eventType.name,

@@ -1,20 +1,35 @@
-import type { DestinationCalendar, SelectedCalendar } from "@prisma/client";
+import type { Prisma, DestinationCalendar, SelectedCalendar } from "@prisma/client";
 import type { Dayjs } from "dayjs";
 import type { calendar_v3 } from "googleapis";
 import type { Time } from "ical.js";
 import type { TFunction } from "next-i18next";
 
-import type { Event } from "./Event";
+import type { Frequency } from "@calcom/prisma/zod-utils";
+
 import type { Ensure } from "./utils";
+
+export type { VideoCallData } from "./VideoApiAdapter";
+
+type PaymentInfo = {
+  link?: string | null;
+  reason?: string | null;
+  id?: string | null;
+};
 
 export type Person = {
   name: string;
   email: string;
   timeZone: string;
   language: { translate: TFunction; locale: string };
+  username?: string;
+  id?: string;
 };
 
 export type EventBusyDate = Record<"start" | "end", Date | string>;
+
+export type EventBusyDetails = EventBusyDate & {
+  title?: string;
+};
 
 export type CalendarServiceType = typeof Calendar;
 
@@ -24,7 +39,7 @@ export type NewCalendarEventType = {
   type: string;
   password: string;
   url: string;
-  additionalInfo: Record<string, any>;
+  additionalInfo: Record<string, unknown>;
 };
 
 export type CalendarEventType = {
@@ -57,41 +72,63 @@ export type BatchResponse = {
 };
 
 export type SubResponse = {
-  body: { value: { start: { dateTime: string }; end: { dateTime: string } }[] };
+  body: {
+    value: {
+      showAs: "free" | "tentative" | "away" | "busy" | "workingElsewhere";
+      start: { dateTime: string };
+      end: { dateTime: string };
+    }[];
+  };
 };
 
 export interface ConferenceData {
   createRequest?: calendar_v3.Schema$CreateConferenceRequest;
 }
 
-export interface AdditionInformation {
+export interface AdditionalInformation {
   conferenceData?: ConferenceData;
   entryPoints?: EntryPoint[];
   hangoutLink?: string;
 }
 
+export interface RecurringEvent {
+  dtstart?: Date | undefined;
+  interval: number;
+  count: number;
+  freq: Frequency;
+  until?: Date | undefined;
+  tzid?: string | undefined;
+}
+
+// If modifying this interface, probably should update builders/calendarEvent files
 export interface CalendarEvent {
   type: string;
   title: string;
   startTime: string;
   endTime: string;
+  organizer: Person;
+  attendees: Person[];
+  additionalNotes?: string | null;
+  customInputs?: Prisma.JsonObject | null;
   description?: string | null;
   team?: {
     name: string;
     members: string[];
   };
   location?: string | null;
-  organizer: Person;
-  attendees: Person[];
   conferenceData?: ConferenceData;
-  additionInformation?: AdditionInformation;
+  additionalInformation?: AdditionalInformation;
   uid?: string | null;
   videoCallData?: VideoCallData;
   paymentInfo?: PaymentInfo | null;
+  requiresConfirmation?: boolean | null;
   destinationCalendar?: DestinationCalendar | null;
   cancellationReason?: string | null;
   rejectionReason?: string | null;
   hideCalendarNotes?: boolean;
+  recurrence?: string;
+  recurringEvent?: RecurringEvent | null;
+  eventTypeId?: number | null;
 }
 
 export interface EntryPoint {
@@ -105,7 +142,7 @@ export interface EntryPoint {
   password?: string;
 }
 
-export interface AdditionInformation {
+export interface AdditionalInformation {
   conferenceData?: ConferenceData;
   entryPoints?: EntryPoint[];
   hangoutLink?: string;
@@ -114,14 +151,19 @@ export interface AdditionInformation {
 export interface IntegrationCalendar extends Ensure<Partial<SelectedCalendar>, "externalId"> {
   primary?: boolean;
   name?: string;
+  readOnly?: boolean;
 }
 
 export interface Calendar {
   createEvent(event: CalendarEvent): Promise<NewCalendarEventType>;
 
-  updateEvent(uid: string, event: CalendarEvent): Promise<Event | Event[]>;
+  updateEvent(
+    uid: string,
+    event: CalendarEvent,
+    externalCalendarId?: string | null
+  ): Promise<NewCalendarEventType | NewCalendarEventType[]>;
 
-  deleteEvent(uid: string, event: CalendarEvent): Promise<unknown>;
+  deleteEvent(uid: string, event: CalendarEvent, externalCalendarId?: string | null): Promise<unknown>;
 
   getAvailability(
     dateFrom: string,

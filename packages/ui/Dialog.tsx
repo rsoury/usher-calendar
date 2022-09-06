@@ -2,6 +2,8 @@ import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { useRouter } from "next/router";
 import React, { ReactNode, useState } from "react";
 
+import classNames from "@calcom/lib/classNames";
+
 export type DialogProps = React.ComponentProps<typeof DialogPrimitive["Root"]> & {
   name?: string;
   clearQueryParamsOnClose?: string[];
@@ -34,7 +36,7 @@ export function Dialog(props: DialogProps) {
           },
         },
         undefined,
-        { shallow: true }
+        { shallow: false }
       );
       setOpen(open);
     };
@@ -50,23 +52,36 @@ export function Dialog(props: DialogProps) {
 
   return (
     <DialogPrimitive.Root {...dialogProps}>
-      <DialogPrimitive.Overlay className="fixed inset-0 z-40 bg-gray-500 bg-opacity-75 transition-opacity" />
+      <DialogPrimitive.Overlay className="fadeIn fixed inset-0 z-40 bg-black bg-opacity-50 transition-opacity" />
       {children}
     </DialogPrimitive.Root>
   );
 }
-type DialogContentProps = React.ComponentProps<typeof DialogPrimitive["Content"]>;
+type DialogContentProps = React.ComponentProps<typeof DialogPrimitive["Content"]> & {
+  size?: "xl" | "lg";
+};
 
 export const DialogContent = React.forwardRef<HTMLDivElement, DialogContentProps>(
   ({ children, ...props }, forwardedRef) => (
     <DialogPrimitive.Portal>
-      <DialogPrimitive.Overlay className="fixed inset-0 z-40 bg-gray-500 bg-opacity-75 transition-opacity" />
-      <DialogPrimitive.Content
-        {...props}
-        className="fixed left-1/2 top-1/2 z-[9999999999] min-w-[360px] -translate-x-1/2 -translate-y-1/2 rounded bg-white p-6 text-left shadow-xl focus-visible:outline-none sm:w-full sm:max-w-[35rem] sm:align-middle"
-        ref={forwardedRef}>
-        {children}
-      </DialogPrimitive.Content>
+      <DialogPrimitive.Overlay className="fadeIn fixed inset-0 z-40 grid place-items-center overflow-y-auto bg-gray-500 bg-opacity-75 py-4 transition-opacity">
+        {/*zIndex one less than Toast */}
+        <DialogPrimitive.Content
+          {...props}
+          className={classNames(
+            "min-w-[360px] rounded bg-white text-left shadow-xl focus-visible:outline-none sm:w-full sm:align-middle",
+            props.size == "xl"
+              ? "p-0.5 sm:max-w-[98vw]"
+              : props.size == "lg"
+              ? "p-6 sm:max-w-[70rem]"
+              : "p-6 sm:max-w-[35rem]",
+            "max-h-[560px] overflow-visible overscroll-auto md:h-auto md:max-h-[inherit]",
+            `${props.className || ""}`
+          )}
+          ref={forwardedRef}>
+          {children}
+        </DialogPrimitive.Content>
+      </DialogPrimitive.Overlay>
     </DialogPrimitive.Portal>
   )
 );

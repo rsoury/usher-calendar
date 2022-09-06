@@ -2,7 +2,7 @@ import { FormEvent, useCallback, useEffect, useState } from "react";
 import Cropper from "react-easy-crop";
 
 import Button from "@calcom/ui/Button";
-import { DialogClose, DialogTrigger, Dialog, DialogContent } from "@calcom/ui/Dialog";
+import { Dialog, DialogClose, DialogContent, DialogTrigger } from "@calcom/ui/Dialog";
 
 import { Area, getCroppedImg } from "@lib/cropImage";
 import { useFileReader } from "@lib/hooks/useFileReader";
@@ -71,15 +71,15 @@ export default function ImageUploader({
   ...props
 }: ImageUploaderProps) {
   const { t } = useLocale();
-  const [imageSrc, setImageSrc] = useState<string | null>();
-  const [croppedAreaPixels, setCroppedAreaPixels] = useState<Area | null>();
+  const [imageSrc, setImageSrc] = useState<string | null>(null);
+  const [croppedAreaPixels, setCroppedAreaPixels] = useState<Area | null>(null);
 
   const [{ result }, setFile] = useFileReader({
     method: "readAsDataURL",
   });
 
   useEffect(() => {
-    setImageSrc(props.imageSrc);
+    if (props.imageSrc) setImageSrc(props.imageSrc);
   }, [props.imageSrc]);
 
   const onInputFile = (e: FileEvent<HTMLInputElement>) => {
@@ -90,8 +90,9 @@ export default function ImageUploader({
   };
 
   const showCroppedImage = useCallback(
-    async (croppedAreaPixels) => {
+    async (croppedAreaPixels: Area | null) => {
       try {
+        if (!croppedAreaPixels) return;
         const croppedImage = await getCroppedImg(
           result as string /* result is always string when using readAsDataUrl */,
           croppedAreaPixels
@@ -134,11 +135,14 @@ export default function ImageUploader({
                     {t("no_target", { target })}
                   </p>
                 )}
-                {imageSrc && <img className="h-20 w-20 rounded-full" src={imageSrc} alt={target} />}
+                {imageSrc && (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img className="h-20 w-20 rounded-full" src={imageSrc} alt={target} />
+                )}
               </div>
             )}
             {result && <CropContainer imageSrc={result as string} onCropComplete={setCroppedAreaPixels} />}
-            <label className="mt-8 rounded-sm border border-gray-300 bg-white px-3 py-1 text-xs font-medium leading-4 text-gray-700 hover:bg-gray-50 hover:text-gray-900 hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-neutral-900 focus:ring-offset-1 dark:border-gray-800 dark:bg-transparent dark:text-white dark:hover:bg-gray-900">
+            <label className="mt-8 rounded-sm border border-gray-300 bg-white px-3 py-1 text-xs font-medium leading-4 text-gray-700 hover:bg-gray-50 hover:text-gray-900 focus:outline-none focus:ring-2 focus:ring-neutral-900 focus:ring-offset-1 dark:border-gray-800 dark:bg-transparent dark:text-white dark:hover:bg-gray-900">
               <input
                 onInput={onInputFile}
                 type="file"

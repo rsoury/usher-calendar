@@ -1,10 +1,9 @@
+/* eslint-disable @typescript-eslint/triple-slash-reference */
 /// <reference path="../types/ical.d.ts"/>
 import { Credential, Prisma } from "@prisma/client";
-import dayjs from "dayjs";
-import timezone from "dayjs/plugin/timezone";
-import utc from "dayjs/plugin/utc";
 import ICAL from "ical.js";
-import { Attendee, createEvent, DateArray, DurationObject, Person } from "ics";
+import type { Attendee, DateArray, DurationObject, Person } from "ics";
+import { createEvent } from "ics";
 import {
   createAccount,
   createCalendarObject,
@@ -17,6 +16,8 @@ import {
 } from "tsdav";
 import { v4 as uuidv4 } from "uuid";
 
+import dayjs from "@calcom/dayjs";
+import sanitizeCalendarObject from "@calcom/lib/sanitizeCalendarObject";
 import type {
   Calendar,
   CalendarEvent,
@@ -25,7 +26,6 @@ import type {
   IntegrationCalendar,
   NewCalendarEventType,
 } from "@calcom/types/Calendar";
-import type { Event } from "@calcom/types/Event";
 
 import { getLocation, getRichDescription } from "./CalEventParser";
 import { symmetricDecrypt } from "./crypto";
@@ -33,9 +33,6 @@ import logger from "./logger";
 
 const TIMEZONE_FORMAT = "YYYY-MM-DDTHH:mm:ss[Z]";
 const DEFAULT_CALENDAR_TYPE = "caldav";
-
-dayjs.extend(utc);
-dayjs.extend(timezone);
 
 const CALENDSO_ENCRYPTION_KEY = process.env.CALENDSO_ENCRYPTION_KEY || "";
 
@@ -93,13 +90,17 @@ export default abstract class BaseCalendarService implements Calendar {
         description: getRichDescription(event),
         location: getLocation(event),
         organizer: { email: event.organizer.email, name: event.organizer.name },
+        attendees: getAttendees(event.attendees),
         /** according to https://datatracker.ietf.org/doc/html/rfc2446#section-3.2.1, in a published iCalendar component.
          * "Attendees" MUST NOT be present
          * `attendees: this.getAttendees(event.attendees),`
+         * [UPDATE]: Since we're not using the PUBLISH method to publish the iCalendar event and creating the event directly on iCal,
+         * this shouldn't be an issue and we should be able to add attendees to the event right here.
          */
       });
 
-      if (error || !iCalString) throw new Error("Error creating iCalString");
+      if (error || !iCalString)
+        throw new Error(`Error creating iCalString:=> ${error?.message} : ${error?.name} `);
 
       // We create the event directly on iCal
       const responses = await Promise.all(
@@ -143,7 +144,10 @@ export default abstract class BaseCalendarService implements Calendar {
     }
   }
 
-  async updateEvent(uid: string, event: CalendarEvent) {
+  async updateEvent(
+    uid: string,
+    event: CalendarEvent
+  ): Promise<NewCalendarEventType | NewCalendarEventType[]> {
     try {
       const events = await this.getEventsByUID(uid);
 
@@ -164,15 +168,16 @@ export default abstract class BaseCalendarService implements Calendar {
         this.log.debug("Error creating iCalString");
 
         return {
+          uid,
           type: event.type,
           id: typeof event.uid === "string" ? event.uid : "-1",
           password: "",
           url: typeof event.location === "string" ? event.location : "-1",
+          additionalInfo: {},
         };
       }
 
       const eventsToUpdate = events.filter((e) => e.uid === uid);
-
       return Promise.all(
         eventsToUpdate.map((e) => {
           return updateCalendarObject({
@@ -184,7 +189,7 @@ export default abstract class BaseCalendarService implements Calendar {
             headers: this.headers,
           });
         })
-      ).then((p) => p.map((r) => r.json() as unknown as Event));
+      ).then((p) => p.map((r) => r.json() as unknown as NewCalendarEventType));
     } catch (reason) {
       this.log.error(reason);
 
@@ -241,19 +246,84 @@ export default abstract class BaseCalendarService implements Calendar {
       )
     ).flat();
 
-    const events = objects
-      .filter((e) => !!e.data)
-      .map((object) => {
-        const jcalData = ICAL.parse(object.data);
-        const vcalendar = new ICAL.Component(jcalData);
-        const vevent = vcalendar.getFirstSubcomponent("vevent");
-        const event = new ICAL.Event(vevent);
+    const events: { start: string; end: string }[] = [];
 
-        return {
-          start: event.startDate.toJSDate().toISOString(),
-          end: event.endDate.toJSDate().toISOString(),
-        };
+    objects.forEach((object) => {
+      if (object.data == null) return;
+
+      const jcalData = ICAL.parse(sanitizeCalendarObject(object));
+      const vcalendar = new ICAL.Component(jcalData);
+      const vevent = vcalendar.getFirstSubcomponent("vevent");
+
+      // if event status is free or transparent, return
+      if (vevent?.getFirstPropertyValue("transp") === "TRANSPARENT") return;
+
+      const event = new ICAL.Event(vevent);
+      const vtimezone = vcalendar.getFirstSubcomponent("vtimezone");
+
+      if (event.isRecurring()) {
+        let maxIterations = 365;
+        if (["HOURLY", "SECONDLY", "MINUTELY"].includes(event.getRecurrenceTypes())) {
+          console.error(`Won't handle [${event.getRecurrenceTypes()}] recurrence`);
+          return;
+        }
+
+        const start = dayjs(dateFrom);
+        const end = dayjs(dateTo);
+        const iterator = event.iterator();
+        let current;
+        let currentEvent;
+        let currentStart;
+        let currentError;
+
+        do {
+          maxIterations -= 1;
+          current = iterator.next();
+
+          try {
+            // @see https://github.com/mozilla-comm/ical.js/issues/514
+            currentEvent = event.getOccurrenceDetails(current);
+          } catch (error) {
+            if (error instanceof Error && error.message !== currentError) {
+              currentError = error.message;
+              console.log("error", error);
+            }
+          }
+          if (!currentEvent) return;
+          // do not mix up caldav and icalendar! For the recurring events here, the timezone
+          // provided is relevant, not as pointed out in https://datatracker.ietf.org/doc/html/rfc4791#section-9.6.5
+          // where recurring events are always in utc (in caldav!). Thus, apply the time zone here.
+          if (vtimezone) {
+            const zone = new ICAL.Timezone(vtimezone);
+            currentEvent.startDate = currentEvent.startDate.convertToZone(zone);
+            currentEvent.endDate = currentEvent.endDate.convertToZone(zone);
+          }
+          currentStart = dayjs(currentEvent.startDate.toJSDate());
+
+          if (currentStart.isBetween(start, end) === true) {
+            events.push({
+              start: currentStart.toISOString(),
+              end: dayjs(currentEvent.endDate.toJSDate()).toISOString(),
+            });
+          }
+        } while (maxIterations > 0 && currentStart.isAfter(end) === false);
+        if (maxIterations <= 0) {
+          console.warn("could not find any occurrence for recurring event in 365 iterations");
+        }
+        return;
+      }
+
+      if (vtimezone) {
+        const zone = new ICAL.Timezone(vtimezone);
+        event.startDate = event.startDate.convertToZone(zone);
+        event.endDate = event.endDate.convertToZone(zone);
+      }
+
+      return events.push({
+        start: dayjs(event.startDate.toJSDate()).toISOString(),
+        end: dayjs(event.endDate.toJSDate()).toISOString(),
       });
+    });
 
     return Promise.resolve(events);
   }
@@ -312,7 +382,7 @@ export default abstract class BaseCalendarService implements Calendar {
       const events = objects
         .filter((e) => !!e.data)
         .map((object) => {
-          const jcalData = ICAL.parse(object.data);
+          const jcalData = ICAL.parse(sanitizeCalendarObject(object));
 
           const vcalendar = new ICAL.Component(jcalData);
 

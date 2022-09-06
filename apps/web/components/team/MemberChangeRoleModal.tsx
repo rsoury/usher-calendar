@@ -1,24 +1,52 @@
 import { MembershipRole } from "@prisma/client";
-import { useState } from "react";
-import React, { SyntheticEvent } from "react";
+import { SyntheticEvent, useMemo, useState } from "react";
 
 import { useLocale } from "@calcom/lib/hooks/useLocale";
+import { trpc } from "@calcom/trpc/react";
 import Button from "@calcom/ui/Button";
 
-import { trpc } from "@lib/trpc";
-
 import ModalContainer from "@components/ui/ModalContainer";
+import Select from "@components/ui/form/Select";
+
+type MembershipRoleOption = {
+  label: string;
+  value: MembershipRole;
+};
 
 export default function MemberChangeRoleModal(props: {
   isOpen: boolean;
+  currentMember: MembershipRole;
   memberId: number;
   teamId: number;
   initialRole: MembershipRole;
   onExit: () => void;
 }) {
-  const [role, setRole] = useState(props.initialRole || MembershipRole.MEMBER);
-  const [errorMessage, setErrorMessage] = useState("");
   const { t } = useLocale();
+
+  const options = useMemo(() => {
+    return [
+      {
+        label: t("member"),
+        value: MembershipRole.MEMBER,
+      },
+      {
+        label: t("admin"),
+        value: MembershipRole.ADMIN,
+      },
+      {
+        label: t("owner"),
+        value: MembershipRole.OWNER,
+      },
+    ].filter(({ value }) => value !== MembershipRole.OWNER || props.currentMember === MembershipRole.OWNER);
+  }, [t, props.currentMember]);
+
+  const [role, setRole] = useState<MembershipRoleOption>(
+    options.find((option) => option.value === props.initialRole) || {
+      label: t("member"),
+      value: MembershipRole.MEMBER,
+    }
+  );
+  const [errorMessage, setErrorMessage] = useState("");
   const utils = trpc.useContext();
 
   const changeRoleMutation = trpc.useMutation("viewer.teams.changeMemberRole", {
@@ -37,10 +65,9 @@ export default function MemberChangeRoleModal(props: {
     changeRoleMutation.mutate({
       teamId: props.teamId,
       memberId: props.memberId,
-      role,
+      role: role.value,
     });
   }
-
   return (
     <ModalContainer isOpen={props.isOpen} onExit={props.onExit}>
       <>
@@ -56,17 +83,16 @@ export default function MemberChangeRoleModal(props: {
             <label className="mb-2 block text-sm font-medium tracking-wide text-gray-700" htmlFor="role">
               {t("role")}
             </label>
-            <select
+            {/*<option value="OWNER">{t("owner")}</option> - needs dialog to confirm change of ownership */}
+            <Select
+              isSearchable={false}
+              options={options}
               value={role}
-              onChange={(e) => setRole(e.target.value as MembershipRole)}
+              onChange={(option) => option && setRole(option)}
               id="role"
-              className="focus:border-brand mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:ring-black sm:text-sm">
-              <option value="MEMBER">{t("member")}</option>
-              <option value="ADMIN">{t("admin")}</option>
-              {/*<option value="OWNER">{t("owner")}</option> - needs dialog to confirm change of ownership */}
-            </select>
+              className="mt-1 block w-full rounded-md border-gray-300 text-sm"
+            />
           </div>
-
           {errorMessage && (
             <p className="text-sm text-red-700">
               <span className="font-bold">Error: </span>

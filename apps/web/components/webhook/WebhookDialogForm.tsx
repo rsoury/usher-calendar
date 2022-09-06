@@ -1,15 +1,16 @@
-import { useState } from "react";
+import { Webhook } from "@prisma/client";
+import { useEffect, useState } from "react";
 import { Controller, useForm } from "react-hook-form";
 
+import { useLocale } from "@calcom/lib/hooks/useLocale";
 import showToast from "@calcom/lib/notification";
+import { trpc } from "@calcom/trpc/react";
 import Button from "@calcom/ui/Button";
 import { DialogFooter } from "@calcom/ui/Dialog";
 import Switch from "@calcom/ui/Switch";
 import { FieldsetLegend, Form, InputGroupBox, TextArea, TextField } from "@calcom/ui/form/fields";
 
-import { useLocale } from "@lib/hooks/useLocale";
-import { trpc } from "@lib/trpc";
-import { WEBHOOK_TRIGGER_EVENTS } from "@lib/webhooks/constants";
+import { WEBHOOK_TRIGGER_EVENTS_GROUPED_BY_APP } from "@lib/webhooks/constants";
 import customTemplate, { hasTemplateIntegration } from "@lib/webhooks/integrationTemplate";
 
 import { TWebhook } from "@components/webhook/WebhookListItem";
@@ -18,38 +19,65 @@ import WebhookTestDisclosure from "@components/webhook/WebhookTestDisclosure";
 export default function WebhookDialogForm(props: {
   eventTypeId?: number;
   defaultValues?: TWebhook;
+  app?: string;
   handleClose: () => void;
+  webhooks: Webhook[];
 }) {
   const { t } = useLocale();
   const utils = trpc.useContext();
-  const handleSubscriberUrlChange = (e) => {
-    form.setValue("subscriberUrl", e.target.value);
-    if (hasTemplateIntegration({ url: e.target.value })) {
-      setUseCustomPayloadTemplate(true);
-      form.setValue("payloadTemplate", customTemplate({ url: e.target.value }));
-    }
-  };
+  const appId = props.app;
+  const webhooks = props.webhooks;
+
+  const triggers = !appId
+    ? WEBHOOK_TRIGGER_EVENTS_GROUPED_BY_APP["core"]
+    : WEBHOOK_TRIGGER_EVENTS_GROUPED_BY_APP[appId as keyof typeof WEBHOOK_TRIGGER_EVENTS_GROUPED_BY_APP];
   const {
     defaultValues = {
       id: "",
-      eventTriggers: WEBHOOK_TRIGGER_EVENTS,
+      eventTriggers: triggers,
       subscriberUrl: "",
       active: true,
       payloadTemplate: null,
-    } as Omit<TWebhook, "userId" | "createdAt" | "eventTypeId">,
+      secret: null,
+    } as Omit<TWebhook, "userId" | "createdAt" | "eventTypeId" | "appId">,
   } = props;
 
   const [useCustomPayloadTemplate, setUseCustomPayloadTemplate] = useState(!!defaultValues.payloadTemplate);
+  const [changeSecret, setChangeSecret] = useState(false);
+  const [newSecret, setNewSecret] = useState("");
+  const hasSecretKey = !!defaultValues.secret;
+  const currentSecret = defaultValues.secret;
+
+  const subscriberUrlReserved = (subscriberUrl: string, id: string): boolean => {
+    return !!webhooks.find((webhook) => webhook.subscriberUrl === subscriberUrl && webhook.id !== id);
+  };
 
   const form = useForm({
     defaultValues,
   });
+
+  const handleInput = (event: React.FormEvent<HTMLInputElement>) => {
+    setNewSecret(event.currentTarget.value);
+  };
+
+  useEffect(() => {
+    if (changeSecret) {
+      form.unregister("secret", { keepDefaultValue: false });
+    }
+  }, [changeSecret]);
+
   return (
     <Form
       data-testid="WebhookDialogForm"
       form={form}
       handleSubmit={async (event) => {
-        const e = { ...event, eventTypeId: props.eventTypeId };
+        if (subscriberUrlReserved(event.subscriberUrl, event.id)) {
+          showToast(t("webhook_subscriber_url_reserved"), "error");
+          return;
+        }
+        const e = changeSecret
+          ? { ...event, eventTypeId: props.eventTypeId, appId }
+          : { ...event, secret: currentSecret, eventTypeId: props.eventTypeId, appId };
         if (!useCustomPayloadTemplate && event.payloadTemplate) {
           event.payloadTemplate = null;
         }
@@ -65,7 +93,9 @@ export default function WebhookDialogForm(props: {
         props.handleClose();
       }}
       className="space-y-4">
-      <input type="hidden" {...form.register("id")} />
+      <div>
+        <input type="hidden" {...form.register("id")} />
+      </div>
       <fieldset className="space-y-2">
         <InputGroupBox className="border-0 bg-gray-50">
           <Controller
@@ -83,18 +113,25 @@ export default function WebhookDialogForm(props: {
           />
         </InputGroupBox>
       </fieldset>
-      <TextField
-        label={t("subscriber_url")}
-        {...form.register("subscriberUrl")}
-        required
-        type="url"
-        onChange={handleSubscriberUrlChange}
-      />
-
+      <div>
+        <TextField
+          label={t("subscriber_url")}
+          {...form.register("subscriberUrl")}
+          required
+          type="url"
+          onChange={(e) => {
+            form.setValue("subscriberUrl", e.target.value);
+            if (hasTemplateIntegration({ url: e.target.value })) {
+              setUseCustomPayloadTemplate(true);
+              form.setValue("payloadTemplate", customTemplate({ url: e.target.value }));
+            }
+          }}
+        />
+      </div>
       <fieldset className="space-y-2">
         <FieldsetLegend>{t("event_triggers")}</FieldsetLegend>
         <InputGroupBox className="border-0 bg-gray-50">
-          {WEBHOOK_TRIGGER_EVENTS.map((key) => (
+          {triggers.map((key) => (
             <Controller
               key={key}
               control={form.control}
@@ -116,6 +153,50 @@ export default function WebhookDialogForm(props: {
             />
           ))}
         </InputGroupBox>
+      </fieldset>
+      <fieldset className="space-y-2">
+        {!!hasSecretKey && !changeSecret && (
+          <>
+            <FieldsetLegend>{t("secret")}</FieldsetLegend>
+            <div className="rounded-sm bg-gray-50 p-2 text-xs text-neutral-900">
+              {t("forgotten_secret_description")}
+            </div>
+            <Button
+              color="secondary"
+              type="button"
+              className="py-1 text-xs"
+              onClick={() => {
+                setChangeSecret(true);
+              }}>
+              {t("change_secret")}
+            </Button>
+          </>
+        )}
+        {!!hasSecretKey && changeSecret && (
+          <>
+            <TextField
+              autoComplete="off"
+              label={t("secret")}
+              {...form.register("secret")}
+              value={newSecret}
+              onChange={handleInput}
+              type="text"
+              placeholder={t("leave_blank_to_remove_secret")}
+            />
+            <Button
+              color="secondary"
+              type="button"
+              className="py-1 text-xs"
+              onClick={() => {
+                setChangeSecret(false);
+              }}>
+              {t("cancel")}
+            </Button>
+          </>
+        )}
+        {!hasSecretKey && (
+          <TextField autoComplete="off" label={t("secret")} {...form.register("secret")} type="text" />
+        )}
       </fieldset>
       <fieldset className="space-y-2">
         <FieldsetLegend>{t("payload_template")}</FieldsetLegend>
